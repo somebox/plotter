@@ -202,6 +202,7 @@
     <h2>Bed</h2>
     <label>X (mm) <input type="number" id="bed-x" value="300" min="1" step="1"></label>
     <label>Y (mm) <input type="number" id="bed-y" value="300" min="1" step="1"></label>
+    <label>Padding (mm) <input type="number" id="bed-padding" value="5" min="0" step="1"></label>
   </div>
 
   <div class="panel">
@@ -230,14 +231,18 @@
     <div class="info-text">Resolution: distance between sampled points along curves. Lower = smoother but more G-code.</div>
   </div>
 
-  <div class="panel">
-    <h2>Draw Circle</h2>
-    <label>Center X <input type="number" id="circle-cx" value="150" min="0" step="1"></label>
-    <label>Center Y <input type="number" id="circle-cy" value="150" min="0" step="1"></label>
-    <label>Radius <input type="number" id="circle-r" value="20" min="1" step="1"></label>
-    <label>Speed <input type="number" id="circle-f" value="1000" min="100" step="100"></label>
-    <button class="primary" onclick="drawCircle()">Draw Circle</button>
-    <div id="circle-warn" class="warn"></div>
+  <div class="panel" id="move-panel">
+    <h2 id="move-panel-title">Move / Circle</h2>
+    <div style="width:100%; display:flex; gap:6px; margin-bottom:4px;">
+      <button id="mode-move" onclick="setMoveMode('move')">Move To</button>
+      <button id="mode-circle" class="primary" onclick="setMoveMode('circle')">Circle</button>
+    </div>
+    <label>X <input type="number" id="move-x" value="150" min="0" step="1"></label>
+    <label>Y <input type="number" id="move-y" value="150" min="0" step="1"></label>
+    <label id="radius-label">Radius <input type="number" id="circle-r" value="20" min="1" step="1"></label>
+    <label>Speed <input type="number" id="move-f" value="1000" min="100" step="100"></label>
+    <button class="primary" id="move-action-btn" onclick="doMoveAction()">Draw Circle</button>
+    <div id="move-warn" class="warn"></div>
   </div>
 
   <div class="panel">
@@ -372,6 +377,14 @@ cmdInput.addEventListener("keydown", (e) => {
   }
 });
 
+// ── Bed bounds ──
+function getBounds() {
+  const bedX = parseFloat(document.getElementById("bed-x").value) || 300;
+  const bedY = parseFloat(document.getElementById("bed-y").value) || 300;
+  const pad = parseFloat(document.getElementById("bed-padding").value) || 0;
+  return { minX: pad, minY: pad, maxX: bedX - pad, maxY: bedY - pad, bedX, bedY, pad };
+}
+
 // ── Pen ──
 function getPenUpZ() { return parseFloat(document.getElementById("pen-up-z").value); }
 function getPenDownZ() { return parseFloat(document.getElementById("pen-down-z").value); }
@@ -388,31 +401,64 @@ function penDown() {
   addLine("Pen down", "info");
 }
 
-// ── Circle ──
-function drawCircle() {
-  const cx = parseFloat(document.getElementById("circle-cx").value);
-  const cy = parseFloat(document.getElementById("circle-cy").value);
-  const r  = parseFloat(document.getElementById("circle-r").value);
-  const f  = parseFloat(document.getElementById("circle-f").value);
-  const bedX = parseFloat(document.getElementById("bed-x").value);
-  const bedY = parseFloat(document.getElementById("bed-y").value);
-  const warn = document.getElementById("circle-warn");
+// ── Move / Circle ──
+let moveMode = "circle";
+
+function setMoveMode(mode) {
+  moveMode = mode;
+  const radiusLabel = document.getElementById("radius-label");
+  const btn = document.getElementById("move-action-btn");
+  const modeMove = document.getElementById("mode-move");
+  const modeCircle = document.getElementById("mode-circle");
+
+  if (mode === "move") {
+    radiusLabel.style.display = "none";
+    btn.textContent = "Move To";
+    modeMove.classList.add("primary");
+    modeCircle.classList.remove("primary");
+  } else {
+    radiusLabel.style.display = "";
+    btn.textContent = "Draw Circle";
+    modeCircle.classList.add("primary");
+    modeMove.classList.remove("primary");
+  }
+}
+
+function doMoveAction() {
+  const x = parseFloat(document.getElementById("move-x").value);
+  const y = parseFloat(document.getElementById("move-y").value);
+  const f = parseFloat(document.getElementById("move-f").value);
+  const b = getBounds();
+  const warn = document.getElementById("move-warn");
   warn.textContent = "";
 
-  if (cx - r < 0 || cx + r > bedX || cy - r < 0 || cy + r > bedY) {
-    warn.textContent = "Circle exceeds bed bounds!";
-    return;
+  if (moveMode === "move") {
+    if (x < b.minX || x > b.maxX || y < b.minY || y > b.maxY) {
+      warn.textContent = `Position outside safe area (${b.minX}-${b.maxX}, ${b.minY}-${b.maxY})!`;
+      return;
+    }
+    send("G90");
+    send(`G1 Z${getPenUpZ()} F${getPenZSpeed()}`);
+    send(`G1 X${x} Y${y} F${f}`);
+    addLine(`Move to (${x}, ${y})`, "info");
+  } else {
+    const r = parseFloat(document.getElementById("circle-r").value);
+    if (x - r < b.minX || x + r > b.maxX || y - r < b.minY || y + r > b.maxY) {
+      warn.textContent = `Circle exceeds safe area (${b.minX}-${b.maxX}, ${b.minY}-${b.maxY})!`;
+      return;
+    }
+    send("G90");
+    send(`G1 Z${getPenUpZ()} F${getPenZSpeed()}`);
+    send(`G1 X${x + r} Y${y} F${f}`);
+    send(`G1 Z${getPenDownZ()} F${getPenZSpeed()}`);
+    send(`G2 X${x + r} Y${y} I${-r} J0 F${f}`);
+    send(`G1 Z${getPenUpZ()} F${getPenZSpeed()}`);
+    addLine(`Circle: center=(${x},${y}) r=${r}`, "info");
   }
-
-  send("G90");
-  send(`G1 Z${getPenUpZ()} F${getPenZSpeed()}`);
-  send(`G1 X${cx + r} Y${cy} F${f}`);
-  send(`G1 Z${getPenDownZ()} F${getPenZSpeed()}`);
-  send(`G2 X${cx + r} Y${cy} I${-r} J0 F${f}`);
-  send(`G1 Z${getPenUpZ()} F${getPenZSpeed()}`);
-  addLine(`Circle: center=(${cx},${cy}) r=${r}`, "info");
-  renderPreview();
 }
+
+// Init mode
+setMoveMode("circle");
 
 // ── SVG Import ──
 document.getElementById("svg-file-input").addEventListener("change", (e) => {
@@ -566,21 +612,19 @@ function getTransformedPaths() {
 
 function fitToBed() {
   if (!svgBBox) return;
-  const bedX = parseFloat(document.getElementById("bed-x").value) || 300;
-  const bedY = parseFloat(document.getElementById("bed-y").value) || 300;
-  const margin = parseFloat(document.getElementById("svg-ox").value) || 10;
+  const b = getBounds();
   const svgW = svgBBox.maxX - svgBBox.minX;
   const svgH = svgBBox.maxY - svgBBox.minY;
   if (svgW === 0 || svgH === 0) return;
 
-  const availX = bedX - margin * 2;
-  const availY = bedY - margin * 2;
+  const availX = b.maxX - b.minX;
+  const availY = b.maxY - b.minY;
   const scale = Math.min(availX / svgW, availY / svgH);
 
   document.getElementById("svg-scale").value = scale.toFixed(3);
-  // Center on bed
-  const ox = (bedX - svgW * scale) / 2;
-  const oy = (bedY - svgH * scale) / 2;
+  // Center within safe area
+  const ox = b.minX + (availX - svgW * scale) / 2;
+  const oy = b.minY + (availY - svgH * scale) / 2;
   document.getElementById("svg-ox").value = ox.toFixed(1);
   document.getElementById("svg-oy").value = oy.toFixed(1);
 
@@ -618,6 +662,26 @@ function renderPreview() {
   for (let y = 0; y <= bedY; y += 50) {
     const py = ch - y * scaleY;
     ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(cw, py); ctx.stroke();
+  }
+
+  // Safe area (padding border)
+  const pad = parseFloat(document.getElementById("bed-padding").value) || 0;
+  if (pad > 0) {
+    ctx.fillStyle = "rgba(231, 76, 60, 0.08)";
+    // Top strip
+    ctx.fillRect(0, 0, cw, pad * scaleY);
+    // Bottom strip
+    ctx.fillRect(0, ch - pad * scaleY, cw, pad * scaleY);
+    // Left strip
+    ctx.fillRect(0, pad * scaleY, pad * scaleX, ch - pad * scaleY * 2);
+    // Right strip
+    ctx.fillRect(cw - pad * scaleX, pad * scaleY, pad * scaleX, ch - pad * scaleY * 2);
+
+    ctx.strokeStyle = "rgba(231, 76, 60, 0.4)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(pad * scaleX, ch - (bedY - pad) * scaleY, (bedX - pad * 2) * scaleX, (bedY - pad * 2) * scaleY);
+    ctx.setLineDash([]);
   }
 
   // Grid labels
@@ -673,7 +737,7 @@ function renderPreview() {
 }
 
 // Re-render preview when SVG controls change
-["svg-ox", "svg-oy", "svg-scale", "bed-x", "bed-y"].forEach(id => {
+["svg-ox", "svg-oy", "svg-scale", "bed-x", "bed-y", "bed-padding"].forEach(id => {
   document.getElementById(id).addEventListener("input", renderPreview);
 });
 
@@ -687,15 +751,14 @@ function plotSvg() {
     return;
   }
 
-  const bedX = parseFloat(document.getElementById("bed-x").value);
-  const bedY = parseFloat(document.getElementById("bed-y").value);
+  const b = getBounds();
   const speed = parseFloat(document.getElementById("svg-speed").value);
 
-  // Bounds check
+  // Bounds check (with padding)
   for (const path of transformed) {
     for (const pt of path) {
-      if (pt.x < 0 || pt.x > bedX || pt.y < 0 || pt.y > bedY) {
-        warn.textContent = "SVG exceeds bed bounds! Adjust offset or scale.";
+      if (pt.x < b.minX || pt.x > b.maxX || pt.y < b.minY || pt.y > b.maxY) {
+        warn.textContent = `SVG exceeds safe area (${b.minX}-${b.maxX}, ${b.minY}-${b.maxY})! Adjust offset or scale.`;
         return;
       }
     }
