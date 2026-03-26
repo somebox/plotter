@@ -470,19 +470,29 @@ document.getElementById("svg-file-input").addEventListener("change", (e) => {
 });
 
 function parseSvg(svgText, filename) {
-  // Insert SVG into a hidden container so the browser parses it
-  const container = document.createElement("div");
-  container.style.position = "absolute";
-  container.style.visibility = "hidden";
-  container.innerHTML = svgText;
-  document.body.appendChild(container);
+  // Strip XML declarations and DOCTYPEs that cause hangs fetching external DTDs
+  svgText = svgText.replace(/<\?xml[^?]*\?>/gi, "");
+  svgText = svgText.replace(/<!DOCTYPE[^>]*>/gi, "");
 
-  const svgEl = container.querySelector("svg");
-  if (!svgEl) {
-    addLine("No <svg> element found in file", "err");
-    container.remove();
+  // Parse as proper SVG so namespace and child elements are preserved
+  const parser = new DOMParser();
+  const svgDoc = parser.parseFromString(svgText.trim(), "image/svg+xml");
+  const parseError = svgDoc.querySelector("parsererror");
+  if (parseError) {
+    addLine("SVG parse error: " + parseError.textContent.slice(0, 100), "err");
     return;
   }
+  const svgEl = svgDoc.querySelector("svg");
+  if (!svgEl) {
+    addLine("No <svg> element found in file", "err");
+    return;
+  }
+
+  // Adopt into a hidden container so geometry APIs (getPointAtLength etc.) work
+  const container = document.createElement("div");
+  container.style.cssText = "position:absolute;visibility:hidden;width:0;height:0;overflow:hidden;";
+  container.appendChild(document.adoptNode(svgEl));
+  document.body.appendChild(container);
 
   const resolution = parseFloat(document.getElementById("svg-res").value) || 0.5;
   svgPaths = [];
@@ -526,30 +536,55 @@ function sampleElement(el, resolution) {
   // Convert element to a temporary <path> if needed, then sample
   const tag = el.tagName.toLowerCase();
   let pathEl;
+  let createdPath = false;
 
   if (tag === "path") {
     pathEl = el;
   } else {
-    // For non-path elements, create a path approximation
     const d = elementToPathD(el);
     if (!d) return [];
     const ns = "http://www.w3.org/2000/svg";
     pathEl = document.createElementNS(ns, "path");
     pathEl.setAttribute("d", d);
     el.parentNode.appendChild(pathEl);
+    createdPath = true;
   }
 
   const totalLen = pathEl.getTotalLength();
-  if (totalLen === 0) return [];
-
-  const points = [];
-  const steps = Math.max(Math.ceil(totalLen / resolution), 1);
-  for (let i = 0; i <= steps; i++) {
-    const pt = pathEl.getPointAtLength((i / steps) * totalLen);
-    points.push({ x: pt.x, y: pt.y });
+  if (totalLen === 0) {
+    if (createdPath) pathEl.remove();
+    return [];
   }
 
-  if (tag !== "path") pathEl.remove();
+  // Get the cumulative transform matrix from this element to the SVG root
+  // This accounts for all parent group transforms
+  let ctm = null;
+  try {
+    const svgRoot = pathEl.ownerSVGElement;
+    if (svgRoot) {
+      const screenCTM = pathEl.getScreenCTM();
+      const svgScreenCTM = svgRoot.getScreenCTM();
+      if (screenCTM && svgScreenCTM) {
+        ctm = svgScreenCTM.inverse().multiply(screenCTM);
+      }
+    }
+  } catch (e) {}
+
+  const points = [];
+  const steps = Math.min(Math.max(Math.ceil(totalLen / resolution), 1), 5000);
+  for (let i = 0; i <= steps; i++) {
+    const pt = pathEl.getPointAtLength((i / steps) * totalLen);
+    if (ctm) {
+      // Apply transform: [a c e; b d f] * [x; y; 1]
+      const tx = ctm.a * pt.x + ctm.c * pt.y + ctm.e;
+      const ty = ctm.b * pt.x + ctm.d * pt.y + ctm.f;
+      points.push({ x: tx, y: ty });
+    } else {
+      points.push({ x: pt.x, y: pt.y });
+    }
+  }
+
+  if (createdPath) pathEl.remove();
   return points;
 }
 
