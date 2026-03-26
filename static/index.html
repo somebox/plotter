@@ -4,966 +4,136 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Plotter Console</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    font-family: system-ui, -apple-system, sans-serif;
-    background: #1a1a2e;
-    color: #e0e0e0;
-    height: 100vh;
-    display: grid;
-    grid-template-columns: 1fr 360px;
-    grid-template-rows: auto 1fr;
-    padding: 12px;
-    gap: 10px;
-  }
-
-  header {
-    grid-column: 1 / -1;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  header h1 { font-size: 1.2rem; }
-  #status {
-    font-size: 0.85rem;
-    padding: 4px 10px;
-    border-radius: 12px;
-    background: #c0392b;
-  }
-  #status.connected { background: #27ae60; }
-
-  /* Left column: preview + console */
-  #left-col {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    min-height: 0;
-  }
-
-  #preview-wrap {
-    background: #0f0f1a;
-    border: 1px solid #333;
-    border-radius: 8px;
-    padding: 8px;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    flex-shrink: 0;
-  }
-  #preview {
-    background: #fff;
-    display: block;
-  }
-
-  #console {
-    flex: 1;
-    background: #0f0f1a;
-    border: 1px solid #333;
-    border-radius: 8px;
-    padding: 10px;
-    overflow-y: auto;
-    font-family: "Cascadia Code", "Fira Code", monospace;
-    font-size: 0.8rem;
-    line-height: 1.4;
-    min-height: 120px;
-  }
-  #console .line-rx { color: #e0e0e0; }
-  #console .line-tx { color: #5dade2; }
-  #console .line-tx::before { content: "\25B6 "; color: #5dade2; }
-  #console .line-err { color: #e74c3c; }
-  #console .line-info { color: #888; font-style: italic; }
-
-  #input-row {
-    display: flex;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-  #cmd-input {
-    flex: 1;
-    padding: 8px 10px;
-    font-family: "Cascadia Code", "Fira Code", monospace;
-    font-size: 0.85rem;
-    background: #0f0f1a;
-    border: 1px solid #444;
-    border-radius: 6px;
-    color: #fff;
-    outline: none;
-  }
-  #cmd-input:focus { border-color: #5dade2; }
-  #cmd-input::placeholder { color: #555; }
-
-  /* Right column: controls */
-  #right-col {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    overflow-y: auto;
-    min-height: 0;
-  }
-
-  .panel {
-    background: #0f0f1a;
-    border: 1px solid #333;
-    border-radius: 8px;
-    padding: 10px 14px;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: end;
-    gap: 8px;
-    flex-shrink: 0;
-  }
-  .panel h2 { font-size: 0.9rem; width: 100%; margin-bottom: 2px; }
-  .panel label {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    font-size: 0.75rem;
-    color: #aaa;
-  }
-  .panel input[type="number"] {
-    width: 72px;
-    padding: 5px 6px;
-    background: #1a1a2e;
-    border: 1px solid #444;
-    border-radius: 4px;
-    color: #fff;
-    font-size: 0.8rem;
-  }
-  .panel .warn { color: #e74c3c; font-size: 0.8rem; width: 100%; }
-  .panel .info-text { color: #888; font-size: 0.75rem; width: 100%; }
-
-  button {
-    padding: 6px 12px;
-    background: #2c3e50;
-    color: #e0e0e0;
-    border: 1px solid #444;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 0.8rem;
-    white-space: nowrap;
-  }
-  button:hover { background: #34495e; }
-  button.primary { background: #2471a3; border-color: #2980b9; }
-  button.primary:hover { background: #2e86c1; }
-  button.danger { background: #922b21; border-color: #c0392b; }
-  button.danger:hover { background: #b03a2e; }
-
-  #quick-buttons {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-  #quick-buttons button { font-size: 0.75rem; padding: 4px 8px; }
-
-  /* SVG file input */
-  #svg-file-input { display: none; }
-  #svg-file-label {
-    display: inline-block;
-    padding: 6px 12px;
-    background: #2471a3;
-    border: 1px solid #2980b9;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 0.8rem;
-    color: #e0e0e0;
-  }
-  #svg-file-label:hover { background: #2e86c1; }
-  #svg-info { font-size: 0.75rem; color: #888; width: 100%; }
-</style>
+<link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 
 <header>
   <h1>Plotter Console</h1>
   <span id="status">Disconnected</span>
-  <span id="queue-status" style="font-size:0.8rem; color:#888;"></span>
-  <span style="flex:1"></span>
-  <button id="pause-btn" onclick="togglePause()" style="display:none; font-size:1rem; padding:8px 16px; font-weight:bold;">Pause</button>
-  <button class="danger" onclick="emergencyStop()" style="font-size:1rem; padding:8px 20px; font-weight:bold;">STOP</button>
+  <span id="queue-status"></span>
+  <span class="spacer"></span>
+  <button id="pause-btn" class="btn-lg" onclick="togglePause()">Pause</button>
+  <button class="danger btn-lg" onclick="emergencyStop()">STOP</button>
   <button onclick="resetPrinter()">Reset</button>
 </header>
 
-<div id="progress-bar-wrap" style="grid-column:1/-1; display:none; background:#0f0f1a; border:1px solid #333; border-radius:6px; overflow:hidden; height:22px; position:relative;">
-  <div id="progress-bar-fill" style="height:100%; background:#2471a3; width:0%; transition:width 0.2s;"></div>
-  <span id="progress-bar-text" style="position:absolute; top:0; left:0; right:0; text-align:center; font-size:0.75rem; line-height:22px; color:#e0e0e0;"></span>
+<div id="progress-bar-wrap" class="progress-bar">
+  <div id="progress-bar-fill" class="progress-bar__fill"></div>
+  <span id="progress-bar-text" class="progress-bar__text"></span>
 </div>
 
-<!-- Left column -->
-<div id="left-col">
+<!-- Preview column -->
+<div id="preview-col">
   <div id="preview-wrap">
     <canvas id="preview" width="400" height="400"></canvas>
+    <div id="preview-controls">
+      <button onclick="zoomIn()" title="Zoom In">+</button>
+      <button onclick="zoomOut()" title="Zoom Out">&minus;</button>
+      <button onclick="zoomReset()" title="Reset View">&#8634;</button>
+    </div>
   </div>
+</div>
+
+<!-- Terminal column -->
+<div id="terminal-col">
   <div id="console"></div>
+  <div id="quick-bar">
+    <button onclick="send('G28')">Home All</button>
+    <button onclick="send('G28 X')">Home X</button>
+    <button onclick="send('G28 Y')">Home Y</button>
+    <button onclick="send('G28 Z')">Home Z</button>
+    <button onclick="send('M114')">Position</button>
+    <button onclick="send('M105')">Temps</button>
+    <button onclick="send('M84')">Motors Off</button>
+    <button onclick="send('M503')">Settings</button>
+  </div>
   <div id="input-row">
     <input type="text" id="cmd-input" placeholder="Type G-code command..." autocomplete="off" spellcheck="false">
     <button class="primary" onclick="sendInput()">Send</button>
   </div>
 </div>
 
-<!-- Right column -->
+<!-- Right column: tabbed panels -->
 <div id="right-col">
-
-  <div class="panel">
-    <h2>Bed</h2>
-    <label>X (mm) <input type="number" id="bed-x" value="300" min="1" step="1"></label>
-    <label>Y (mm) <input type="number" id="bed-y" value="300" min="1" step="1"></label>
-    <label>Padding (mm) <input type="number" id="bed-padding" value="15" min="0" step="1"></label>
+  <div id="panel-tabs">
+    <button class="tab-btn active" data-tab="workflow" onclick="switchTab('workflow')">Workflow</button>
+    <button class="tab-btn" data-tab="config" onclick="switchTab('config')">Configuration</button>
   </div>
 
-  <div class="panel">
-    <h2>Pen Control</h2>
-    <label>Up Z (mm) <input type="number" id="pen-up-z" value="5" min="0" step="0.5"></label>
-    <label>Down Z (mm) <input type="number" id="pen-down-z" value="0" min="0" step="0.1"></label>
-    <label>Z Speed <input type="number" id="pen-z-speed" value="300" min="50" step="50"></label>
-    <button class="primary" onclick="penUp()">Pen Up</button>
-    <button class="primary" onclick="penDown()">Pen Down</button>
-  </div>
-
-  <div class="panel">
-    <h2>Speed Override</h2>
-    <label>Feed Rate % <input type="number" id="speed-pct" value="100" min="10" max="500" step="10"></label>
-    <button onclick="setSpeed(50)">50%</button>
-    <button onclick="setSpeed(75)">75%</button>
-    <button class="primary" onclick="setSpeed(100)">100%</button>
-    <button onclick="setSpeed(125)">125%</button>
-    <button onclick="setSpeed(150)">150%</button>
-    <button onclick="applySpeed()">Apply</button>
-    <div class="info-text">M220: applies immediately to current and queued moves.</div>
-  </div>
-
-  <div class="panel">
-    <h2>SVG Import</h2>
-    <input type="file" id="svg-file-input" accept=".svg">
-    <label id="svg-file-label" onclick="document.getElementById('svg-file-input').click()">Choose SVG File</label>
-    <div id="svg-info"></div>
-    <label>Offset X (mm) <input type="number" id="svg-ox" value="10" min="0" step="1"></label>
-    <label>Offset Y (mm) <input type="number" id="svg-oy" value="10" min="0" step="1"></label>
-    <label>Scale <input type="number" id="svg-scale" value="1" min="0.01" step="0.1"></label>
-    <label>Speed <input type="number" id="svg-speed" value="1500" min="100" step="100"></label>
-    <label>Resolution (mm) <input type="number" id="svg-res" value="0.5" min="0.1" step="0.1"></label>
-    <button onclick="fitToBed()">Fit to Bed</button>
-    <button class="primary" onclick="plotSvg()">Plot SVG</button>
-    <button onclick="clearSvg()">Clear</button>
-    <div id="svg-warn" class="warn"></div>
-    <div class="info-text">Resolution: distance between sampled points along curves. Lower = smoother but more G-code.</div>
-  </div>
-
-  <div class="panel" id="move-panel">
-    <h2 id="move-panel-title">Move / Circle</h2>
-    <div style="width:100%; display:flex; gap:6px; margin-bottom:4px;">
-      <button id="mode-move" onclick="setMoveMode('move')">Move To</button>
-      <button id="mode-circle" class="primary" onclick="setMoveMode('circle')">Circle</button>
+  <div id="tab-workflow" class="tab-content active">
+    <div class="panel">
+      <h2>SVG Import</h2>
+      <input type="file" id="svg-file-input" accept=".svg">
+      <label id="svg-file-label" onclick="document.getElementById('svg-file-input').click()">Choose SVG File</label>
+      <div id="svg-info"></div>
+      <div id="svg-load-progress" class="progress-bar progress-bar--sm">
+        <div id="svg-load-fill" class="progress-bar__fill"></div>
+        <span id="svg-load-text" class="progress-bar__text"></span>
+      </div>
+      <label>Offset X (mm) <input type="number" id="svg-ox" value="10" min="0" step="1"></label>
+      <label>Offset Y (mm) <input type="number" id="svg-oy" value="10" min="0" step="1"></label>
+      <label>Scale <input type="number" id="svg-scale" value="1" min="0.01" step="0.1"></label>
+      <label>Speed <input type="number" id="svg-speed" value="1500" min="100" step="100"></label>
+      <label>Resolution (mm) <input type="number" id="svg-res" value="0.5" min="0.1" step="0.1"></label>
+      <label>Simplify (mm) <input type="number" id="svg-simplify" value="0.2" min="0" step="0.05"></label>
+      <label>Merge gap (mm) <input type="number" id="svg-merge" value="1" min="0" step="0.5"></label>
+      <button onclick="fitToBed()">Fit to Bed</button>
+      <button class="primary" onclick="plotSvg()">Plot SVG</button>
+      <button onclick="clearSvg()">Clear</button>
+      <div id="svg-warn" class="warn"></div>
+      <div class="info-text">Simplify: remove points within this tolerance. Merge: join paths closer than this gap. Both reduce commands.</div>
     </div>
-    <label>X <input type="number" id="move-x" value="150" min="0" step="1"></label>
-    <label>Y <input type="number" id="move-y" value="150" min="0" step="1"></label>
-    <label id="radius-label">Radius <input type="number" id="circle-r" value="20" min="1" step="1"></label>
-    <label>Speed <input type="number" id="move-f" value="1000" min="100" step="100"></label>
-    <button class="primary" id="move-action-btn" onclick="doMoveAction()">Draw Circle</button>
-    <div id="move-warn" class="warn"></div>
-  </div>
 
-  <div class="panel">
-    <h2>Quick Commands</h2>
-    <div id="quick-buttons">
-      <button onclick="send('G28')">Home All</button>
-      <button onclick="send('G28 X')">Home X</button>
-      <button onclick="send('G28 Y')">Home Y</button>
-      <button onclick="send('G28 Z')">Home Z</button>
-      <button onclick="send('M114')">Position</button>
-      <button onclick="send('M105')">Temps</button>
-      <button onclick="send('M84')">Motors Off</button>
-      <button onclick="send('M503')">Settings</button>
+    <div class="panel" id="move-panel">
+      <h2 id="move-panel-title">Move / Circle</h2>
+      <div class="flex-row">
+        <button id="mode-move" onclick="setMoveMode('move')">Move To</button>
+        <button id="mode-circle" class="primary" onclick="setMoveMode('circle')">Circle</button>
+      </div>
+      <label>X <input type="number" id="move-x" value="150" min="0" step="1"></label>
+      <label>Y <input type="number" id="move-y" value="150" min="0" step="1"></label>
+      <label id="radius-label">Radius <input type="number" id="circle-r" value="20" min="1" step="1"></label>
+      <label>Speed <input type="number" id="move-f" value="1000" min="100" step="100"></label>
+      <button class="primary" id="move-action-btn" onclick="doMoveAction()">Draw Circle</button>
+      <div id="move-warn" class="warn"></div>
     </div>
   </div>
 
+  <div id="tab-config" class="tab-content">
+    <div class="panel">
+      <h2>Bed</h2>
+      <label>X (mm) <input type="number" id="bed-x" value="300" min="1" step="1"></label>
+      <label>Y (mm) <input type="number" id="bed-y" value="300" min="1" step="1"></label>
+      <label>Padding (mm) <input type="number" id="bed-padding" value="15" min="0" step="1"></label>
+    </div>
+
+    <div class="panel">
+      <h2>Pen Control</h2>
+      <label>Up Z (mm) <input type="number" id="pen-up-z" value="2" min="0" step="0.5"></label>
+      <label>Down Z (mm) <input type="number" id="pen-down-z" value="0" min="0" step="0.1"></label>
+      <label>Z Speed <input type="number" id="pen-z-speed" value="300" min="50" step="50"></label>
+      <button class="primary" onclick="penUp()">Pen Up</button>
+      <button class="primary" onclick="penDown()">Pen Down</button>
+    </div>
+
+    <div class="panel">
+      <h2>Speed Override</h2>
+      <label>Feed Rate % <input type="number" id="speed-pct" value="100" min="10" max="500" step="10"></label>
+      <button onclick="setSpeed(50)">50%</button>
+      <button onclick="setSpeed(75)">75%</button>
+      <button class="primary" onclick="setSpeed(100)">100%</button>
+      <button onclick="setSpeed(125)">125%</button>
+      <button onclick="setSpeed(150)">150%</button>
+      <button onclick="applySpeed()">Apply</button>
+      <div class="info-text">M220: applies immediately to current and queued moves.</div>
+    </div>
+  </div>
 </div>
 
-<script>
-// ── State ──
-const consoleEl = document.getElementById("console");
-const statusEl = document.getElementById("status");
-const cmdInput = document.getElementById("cmd-input");
-const canvas = document.getElementById("preview");
-const ctx = canvas.getContext("2d");
-const cmdHistory = [];
-let historyIdx = -1;
-let ws;
-
-let queuedCount = 0;
-let isPaused = false;
-
-// SVG paths: array of arrays of {x, y} in mm (after scale/offset)
-let svgPaths = [];    // raw parsed paths (in SVG units, mm)
-let svgBBox = null;   // {minX, minY, maxX, maxY} of raw paths
-
-// ── WebSocket ──
-function connect() {
-  const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  ws = new WebSocket(`${proto}//${location.host}/ws`);
-  ws.onopen = () => addLine("Connected to server", "info");
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    if (msg.type === "serial") addLine(msg.data, "rx");
-    else if (msg.type === "sent") {
-      addLine(msg.data, "tx");
-      if (queuedCount > 0) { queuedCount--; updateQueueStatus(); }
-    }
-    else if (msg.type === "error") addLine(msg.data, "err");
-    else if (msg.type === "status") {
-      if (msg.connected) {
-        statusEl.textContent = `Connected: ${msg.port}`;
-        statusEl.classList.add("connected");
-      } else {
-        statusEl.textContent = "No printer";
-        statusEl.classList.remove("connected");
-      }
-    } else if (msg.type === "stopped") {
-      addLine(msg.data, "err");
-      queuedCount = 0;
-      isPaused = false;
-      updateQueueStatus();
-      updatePauseBtn();
-      updateProgress(0, 0);
-    } else if (msg.type === "progress") {
-      updateProgress(msg.sent, msg.total, msg.pct);
-    } else if (msg.type === "paused") {
-      isPaused = true;
-      updatePauseBtn();
-      addLine("Paused", "info");
-    } else if (msg.type === "resumed") {
-      isPaused = false;
-      updatePauseBtn();
-      addLine("Resumed", "info");
-    }
-  };
-  ws.onclose = () => {
-    statusEl.textContent = "Disconnected";
-    statusEl.classList.remove("connected");
-    addLine("Connection lost. Reconnecting...", "info");
-    setTimeout(connect, 2000);
-  };
-  ws.onerror = () => ws.close();
-}
-
-function addLine(text, type) {
-  const div = document.createElement("div");
-  div.className = `line-${type}`;
-  div.textContent = text;
-  consoleEl.appendChild(div);
-  consoleEl.scrollTop = consoleEl.scrollHeight;
-  while (consoleEl.children.length > 2000)
-    consoleEl.removeChild(consoleEl.firstChild);
-}
-
-function send(cmd) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "command", data: cmd }));
-    queuedCount++;
-    updateQueueStatus();
-  }
-}
-
-function updateQueueStatus() {
-  const el = document.getElementById("queue-status");
-  if (queuedCount > 0) el.textContent = `Queue: ${queuedCount}`;
-  else el.textContent = "";
-}
-
-function emergencyStop() {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "emergency_stop" }));
-    addLine("EMERGENCY STOP sent", "err");
-    queuedCount = 0;
-    updateQueueStatus();
-  }
-}
-
-function resetPrinter() {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "reset" }));
-    addLine("Resetting serial connection...", "info");
-    queuedCount = 0;
-    isPaused = false;
-    updateQueueStatus();
-    updatePauseBtn();
-    updateProgress(0, 0);
-  }
-}
-
-function togglePause() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  if (isPaused) {
-    ws.send(JSON.stringify({ type: "resume", pen_down_z: getPenDownZ(), z_speed: getPenZSpeed() }));
-  } else {
-    ws.send(JSON.stringify({ type: "pause", pen_up_z: getPenUpZ(), z_speed: getPenZSpeed() }));
-  }
-}
-
-function updatePauseBtn() {
-  const btn = document.getElementById("pause-btn");
-  if (isPaused) {
-    btn.textContent = "Resume";
-    btn.classList.add("primary");
-  } else {
-    btn.textContent = "Pause";
-    btn.classList.remove("primary");
-  }
-}
-
-function updateProgress(sent, total, pct) {
-  const wrap = document.getElementById("progress-bar-wrap");
-  const fill = document.getElementById("progress-bar-fill");
-  const text = document.getElementById("progress-bar-text");
-  const pauseBtn = document.getElementById("pause-btn");
-  if (total > 0) {
-    wrap.style.display = "block";
-    pauseBtn.style.display = "";
-    fill.style.width = pct + "%";
-    text.textContent = `${pct.toFixed(2)}%  (${sent} / ${total} commands)`;
-    if (sent >= total) {
-      text.textContent = "Complete!";
-      fill.style.width = "100%";
-      pauseBtn.style.display = "none";
-    }
-  } else {
-    wrap.style.display = "none";
-    pauseBtn.style.display = "none";
-    fill.style.width = "0%";
-    text.textContent = "";
-  }
-}
-
-function startJob(totalCommands) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "job_start", total: totalCommands }));
-  }
-}
-
-function sendDirect(cmd) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "direct_command", data: cmd }));
-  }
-}
-
-function sendInput() {
-  const cmd = cmdInput.value.trim();
-  if (!cmd) return;
-  if (isPaused) sendDirect(cmd);
-  else send(cmd);
-  cmdHistory.unshift(cmd);
-  historyIdx = -1;
-  cmdInput.value = "";
-}
-
-cmdInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") sendInput();
-  else if (e.key === "ArrowUp") {
-    e.preventDefault();
-    if (historyIdx < cmdHistory.length - 1) cmdInput.value = cmdHistory[++historyIdx];
-  } else if (e.key === "ArrowDown") {
-    e.preventDefault();
-    if (historyIdx > 0) cmdInput.value = cmdHistory[--historyIdx];
-    else { historyIdx = -1; cmdInput.value = ""; }
-  }
-});
-
-// ── Bed bounds ──
-function getBounds() {
-  const bedX = parseFloat(document.getElementById("bed-x").value) || 300;
-  const bedY = parseFloat(document.getElementById("bed-y").value) || 300;
-  const pad = parseFloat(document.getElementById("bed-padding").value) || 0;
-  return { minX: pad, minY: pad, maxX: bedX - pad, maxY: bedY - pad, bedX, bedY, pad };
-}
-
-// ── Pen ──
-function getPenUpZ() { return parseFloat(document.getElementById("pen-up-z").value); }
-function getPenDownZ() { return parseFloat(document.getElementById("pen-down-z").value); }
-function getPenZSpeed() { return parseFloat(document.getElementById("pen-z-speed").value); }
-
-function penUp() {
-  const s = isPaused ? sendDirect : send;
-  s("G90");
-  s(`G1 Z${getPenUpZ()} F${getPenZSpeed()}`);
-  addLine("Pen up", "info");
-}
-function penDown() {
-  const s = isPaused ? sendDirect : send;
-  s("G90");
-  s(`G1 Z${getPenDownZ()} F${getPenZSpeed()}`);
-  addLine("Pen down", "info");
-}
-
-// ── Speed Override ──
-function setSpeed(pct) {
-  document.getElementById("speed-pct").value = pct;
-  applySpeed();
-}
-
-function applySpeed() {
-  const pct = parseInt(document.getElementById("speed-pct").value);
-  const s = isPaused ? sendDirect : send;
-  s(`M220 S${pct}`);
-  addLine(`Speed override: ${pct}%`, "info");
-}
-
-// ── Move / Circle ──
-let moveMode = "circle";
-
-function setMoveMode(mode) {
-  moveMode = mode;
-  const radiusLabel = document.getElementById("radius-label");
-  const btn = document.getElementById("move-action-btn");
-  const modeMove = document.getElementById("mode-move");
-  const modeCircle = document.getElementById("mode-circle");
-
-  if (mode === "move") {
-    radiusLabel.style.display = "none";
-    btn.textContent = "Move To";
-    modeMove.classList.add("primary");
-    modeCircle.classList.remove("primary");
-  } else {
-    radiusLabel.style.display = "";
-    btn.textContent = "Draw Circle";
-    modeCircle.classList.add("primary");
-    modeMove.classList.remove("primary");
-  }
-}
-
-function doMoveAction() {
-  const x = parseFloat(document.getElementById("move-x").value);
-  const y = parseFloat(document.getElementById("move-y").value);
-  const f = parseFloat(document.getElementById("move-f").value);
-  const b = getBounds();
-  const warn = document.getElementById("move-warn");
-  warn.textContent = "";
-
-  if (moveMode === "move") {
-    if (x < b.minX || x > b.maxX || y < b.minY || y > b.maxY) {
-      warn.textContent = `Position outside safe area (${b.minX}-${b.maxX}, ${b.minY}-${b.maxY})!`;
-      return;
-    }
-    send("G90");
-    send(`G1 Z${getPenUpZ()} F${getPenZSpeed()}`);
-    send(`G1 X${x} Y${y} F${f}`);
-    addLine(`Move to (${x}, ${y})`, "info");
-  } else {
-    const r = parseFloat(document.getElementById("circle-r").value);
-    if (x - r < b.minX || x + r > b.maxX || y - r < b.minY || y + r > b.maxY) {
-      warn.textContent = `Circle exceeds safe area (${b.minX}-${b.maxX}, ${b.minY}-${b.maxY})!`;
-      return;
-    }
-    send("G90");
-    send(`G1 Z${getPenUpZ()} F${getPenZSpeed()}`);
-    send(`G1 X${x + r} Y${y} F${f}`);
-    send(`G1 Z${getPenDownZ()} F${getPenZSpeed()}`);
-    send(`G2 X${x + r} Y${y} I${-r} J0 F${f}`);
-    send(`G1 Z${getPenUpZ()} F${getPenZSpeed()}`);
-    addLine(`Circle: center=(${x},${y}) r=${r}`, "info");
-  }
-}
-
-// Init mode
-setMoveMode("circle");
-
-// ── SVG Import ──
-document.getElementById("svg-file-input").addEventListener("change", (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = (ev) => parseSvg(ev.target.result, file.name);
-  reader.readAsText(file);
-});
-
-function parseSvg(svgText, filename) {
-  // Strip XML declarations and DOCTYPEs that cause hangs fetching external DTDs
-  svgText = svgText.replace(/<\?xml[^?]*\?>/gi, "");
-  svgText = svgText.replace(/<!DOCTYPE[^>]*>/gi, "");
-
-  // Parse as proper SVG so namespace and child elements are preserved
-  const parser = new DOMParser();
-  const svgDoc = parser.parseFromString(svgText.trim(), "image/svg+xml");
-  const parseError = svgDoc.querySelector("parsererror");
-  if (parseError) {
-    addLine("SVG parse error: " + parseError.textContent.slice(0, 100), "err");
-    return;
-  }
-  const svgEl = svgDoc.querySelector("svg");
-  if (!svgEl) {
-    addLine("No <svg> element found in file", "err");
-    return;
-  }
-
-  // Adopt into a hidden container so geometry APIs (getPointAtLength etc.) work
-  const container = document.createElement("div");
-  container.style.cssText = "position:absolute;visibility:hidden;width:0;height:0;overflow:hidden;";
-  container.appendChild(document.adoptNode(svgEl));
-  document.body.appendChild(container);
-
-  svgPaths = [];
-  svgBBox = null;
-
-  const elements = svgEl.querySelectorAll("path, line, polyline, polygon, rect, circle, ellipse");
-  const total = elements.length;
-  if (total === 0) {
-    addLine("No drawable paths found in SVG", "err");
-    container.remove();
-    return;
-  }
-
-  const resolution = parseFloat(document.getElementById("svg-res").value) || 0.5;
-  const svgInfo = document.getElementById("svg-info");
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  let totalPts = 0;
-  let idx = 0;
-
-  addLine(`Parsing ${filename}: ${total} elements...`, "info");
-
-  // Process in async batches so the UI stays responsive
-  function processBatch() {
-    const batchEnd = Math.min(idx + 10, total);
-    for (; idx < batchEnd; idx++) {
-      const points = sampleElement(elements[idx], resolution);
-      if (points.length >= 2) {
-        svgPaths.push(points);
-        totalPts += points.length;
-        for (const pt of points) {
-          if (pt.x < minX) minX = pt.x;
-          if (pt.y < minY) minY = pt.y;
-          if (pt.x > maxX) maxX = pt.x;
-          if (pt.y > maxY) maxY = pt.y;
-        }
-      }
-    }
-
-    // Update bbox and preview incrementally
-    if (svgPaths.length > 0) {
-      svgBBox = { minX, minY, maxX, maxY };
-      renderPreview();
-    }
-
-    const pct = ((idx / total) * 100).toFixed(1);
-    svgInfo.textContent = `Loading ${filename}: ${pct}% (${idx}/${total} elements, ${svgPaths.length} paths, ${totalPts} points)`;
-
-    if (idx < total) {
-      setTimeout(processBatch, 0);
-    } else {
-      // Done
-      container.remove();
-      const w = (maxX - minX).toFixed(1);
-      const h = (maxY - minY).toFixed(1);
-      svgInfo.textContent = `${filename}: ${svgPaths.length} paths, ${totalPts} points, ${w} x ${h} (SVG units)`;
-      addLine(`Loaded ${filename}: ${svgPaths.length} paths, ${totalPts} points`, "info");
-      renderPreview();
-    }
-  }
-
-  processBatch();
-}
-
-function sampleElement(el, resolution) {
-  // Convert element to a temporary <path> if needed, then sample
-  const tag = el.tagName.toLowerCase();
-  let pathEl;
-  let createdPath = false;
-
-  if (tag === "path") {
-    pathEl = el;
-  } else {
-    const d = elementToPathD(el);
-    if (!d) return [];
-    const ns = "http://www.w3.org/2000/svg";
-    pathEl = document.createElementNS(ns, "path");
-    pathEl.setAttribute("d", d);
-    el.parentNode.appendChild(pathEl);
-    createdPath = true;
-  }
-
-  const totalLen = pathEl.getTotalLength();
-  if (totalLen === 0) {
-    if (createdPath) pathEl.remove();
-    return [];
-  }
-
-  // Get the cumulative transform matrix from this element to the SVG root
-  // This accounts for all parent group transforms
-  let ctm = null;
-  try {
-    const svgRoot = pathEl.ownerSVGElement;
-    if (svgRoot) {
-      const screenCTM = pathEl.getScreenCTM();
-      const svgScreenCTM = svgRoot.getScreenCTM();
-      if (screenCTM && svgScreenCTM) {
-        ctm = svgScreenCTM.inverse().multiply(screenCTM);
-      }
-    }
-  } catch (e) {}
-
-  const points = [];
-  const steps = Math.min(Math.max(Math.ceil(totalLen / resolution), 1), 5000);
-  for (let i = 0; i <= steps; i++) {
-    const pt = pathEl.getPointAtLength((i / steps) * totalLen);
-    if (ctm) {
-      // Apply transform: [a c e; b d f] * [x; y; 1]
-      const tx = ctm.a * pt.x + ctm.c * pt.y + ctm.e;
-      const ty = ctm.b * pt.x + ctm.d * pt.y + ctm.f;
-      points.push({ x: tx, y: ty });
-    } else {
-      points.push({ x: pt.x, y: pt.y });
-    }
-  }
-
-  if (createdPath) pathEl.remove();
-  return points;
-}
-
-function elementToPathD(el) {
-  const tag = el.tagName.toLowerCase();
-  if (tag === "line") {
-    const x1 = el.getAttribute("x1") || 0, y1 = el.getAttribute("y1") || 0;
-    const x2 = el.getAttribute("x2") || 0, y2 = el.getAttribute("y2") || 0;
-    return `M${x1},${y1} L${x2},${y2}`;
-  }
-  if (tag === "rect") {
-    const x = +el.getAttribute("x") || 0, y = +el.getAttribute("y") || 0;
-    const w = +el.getAttribute("width"), h = +el.getAttribute("height");
-    return `M${x},${y} L${x+w},${y} L${x+w},${y+h} L${x},${y+h} Z`;
-  }
-  if (tag === "circle") {
-    const cx = +el.getAttribute("cx") || 0, cy = +el.getAttribute("cy") || 0;
-    const r = +el.getAttribute("r");
-    return `M${cx+r},${cy} A${r},${r} 0 1,0 ${cx-r},${cy} A${r},${r} 0 1,0 ${cx+r},${cy}`;
-  }
-  if (tag === "ellipse") {
-    const cx = +el.getAttribute("cx") || 0, cy = +el.getAttribute("cy") || 0;
-    const rx = +el.getAttribute("rx"), ry = +el.getAttribute("ry");
-    return `M${cx+rx},${cy} A${rx},${ry} 0 1,0 ${cx-rx},${cy} A${rx},${ry} 0 1,0 ${cx+rx},${cy}`;
-  }
-  if (tag === "polyline" || tag === "polygon") {
-    const pts = el.getAttribute("points").trim().split(/[\s,]+/);
-    let d = "";
-    for (let i = 0; i < pts.length; i += 2) {
-      d += (i === 0 ? "M" : "L") + pts[i] + "," + pts[i+1] + " ";
-    }
-    if (tag === "polygon") d += "Z";
-    return d;
-  }
-  return null;
-}
-
-function clearSvg() {
-  svgPaths = [];
-  svgBBox = null;
-  document.getElementById("svg-info").textContent = "";
-  document.getElementById("svg-warn").textContent = "";
-  renderPreview();
-}
-
-// ── Get transformed paths (with scale + offset, Y flipped for printer coords) ──
-function getTransformedPaths() {
-  if (!svgPaths.length || !svgBBox) return [];
-  const scale = parseFloat(document.getElementById("svg-scale").value) || 1;
-  const ox = parseFloat(document.getElementById("svg-ox").value) || 0;
-  const oy = parseFloat(document.getElementById("svg-oy").value) || 0;
-  const svgH = svgBBox.maxY - svgBBox.minY;
-
-  return svgPaths.map(path => path.map(pt => ({
-    x: (pt.x - svgBBox.minX) * scale + ox,
-    // Flip Y: SVG Y goes down, printer Y goes up
-    y: (svgH - (pt.y - svgBBox.minY)) * scale + oy,
-  })));
-}
-
-function fitToBed() {
-  if (!svgBBox) return;
-  const b = getBounds();
-  const svgW = svgBBox.maxX - svgBBox.minX;
-  const svgH = svgBBox.maxY - svgBBox.minY;
-  if (svgW === 0 || svgH === 0) return;
-
-  const availX = b.maxX - b.minX;
-  const availY = b.maxY - b.minY;
-  const scale = Math.min(availX / svgW, availY / svgH);
-
-  document.getElementById("svg-scale").value = scale.toFixed(3);
-  // Center within safe area
-  const ox = b.minX + (availX - svgW * scale) / 2;
-  const oy = b.minY + (availY - svgH * scale) / 2;
-  document.getElementById("svg-ox").value = ox.toFixed(1);
-  document.getElementById("svg-oy").value = oy.toFixed(1);
-
-  renderPreview();
-}
-
-// ── Preview Canvas ──
-function renderPreview() {
-  const bedX = parseFloat(document.getElementById("bed-x").value) || 300;
-  const bedY = parseFloat(document.getElementById("bed-y").value) || 300;
-
-  // Fit canvas to container while keeping aspect ratio
-  const maxPx = 400;
-  const aspect = bedX / bedY;
-  let cw, ch;
-  if (aspect >= 1) { cw = maxPx; ch = maxPx / aspect; }
-  else { ch = maxPx; cw = maxPx * aspect; }
-  canvas.width = cw;
-  canvas.height = ch;
-
-  const scaleX = cw / bedX;
-  const scaleY = ch / bedY;
-
-  // Background (bed)
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, cw, ch);
-
-  // Grid every 50mm
-  ctx.strokeStyle = "#ddd";
-  ctx.lineWidth = 0.5;
-  for (let x = 0; x <= bedX; x += 50) {
-    const px = x * scaleX;
-    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, ch); ctx.stroke();
-  }
-  for (let y = 0; y <= bedY; y += 50) {
-    const py = ch - y * scaleY;
-    ctx.beginPath(); ctx.moveTo(0, py); ctx.lineTo(cw, py); ctx.stroke();
-  }
-
-  // Safe area (padding border)
-  const pad = parseFloat(document.getElementById("bed-padding").value) || 0;
-  if (pad > 0) {
-    ctx.fillStyle = "rgba(231, 76, 60, 0.08)";
-    // Top strip
-    ctx.fillRect(0, 0, cw, pad * scaleY);
-    // Bottom strip
-    ctx.fillRect(0, ch - pad * scaleY, cw, pad * scaleY);
-    // Left strip
-    ctx.fillRect(0, pad * scaleY, pad * scaleX, ch - pad * scaleY * 2);
-    // Right strip
-    ctx.fillRect(cw - pad * scaleX, pad * scaleY, pad * scaleX, ch - pad * scaleY * 2);
-
-    ctx.strokeStyle = "rgba(231, 76, 60, 0.4)";
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 4]);
-    ctx.strokeRect(pad * scaleX, ch - (bedY - pad) * scaleY, (bedX - pad * 2) * scaleX, (bedY - pad * 2) * scaleY);
-    ctx.setLineDash([]);
-  }
-
-  // Grid labels
-  ctx.fillStyle = "#999";
-  ctx.font = "9px sans-serif";
-  for (let x = 0; x <= bedX; x += 50) {
-    ctx.fillText(x, x * scaleX + 2, ch - 3);
-  }
-  for (let y = 50; y <= bedY; y += 50) {
-    ctx.fillText(y, 2, ch - y * scaleY + 10);
-  }
-
-  // Draw SVG paths
-  const transformed = getTransformedPaths();
-  if (transformed.length > 0) {
-    ctx.strokeStyle = "#2471a3";
-    ctx.lineWidth = 1.5;
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-    for (const path of transformed) {
-      ctx.beginPath();
-      for (let i = 0; i < path.length; i++) {
-        const px = path[i].x * scaleX;
-        const py = ch - path[i].y * scaleY;  // flip Y: printer Y=0 is bottom
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
-      ctx.stroke();
-    }
-
-    // Bounding box of transformed paths
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const path of transformed) {
-      for (const pt of path) {
-        if (pt.x < minX) minX = pt.x;
-        if (pt.y < minY) minY = pt.y;
-        if (pt.x > maxX) maxX = pt.x;
-        if (pt.y > maxY) maxY = pt.y;
-      }
-    }
-    // Draw bounding rect
-    ctx.strokeStyle = "rgba(231, 76, 60, 0.5)";
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 4]);
-    ctx.strokeRect(minX * scaleX, ch - maxY * scaleY, (maxX - minX) * scaleX, (maxY - minY) * scaleY);
-    ctx.setLineDash([]);
-  }
-
-  // Border
-  ctx.strokeStyle = "#444";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(0, 0, cw, ch);
-}
-
-// Re-render preview when SVG controls change
-["svg-ox", "svg-oy", "svg-scale", "bed-x", "bed-y", "bed-padding"].forEach(id => {
-  document.getElementById(id).addEventListener("input", renderPreview);
-});
-
-// ── Plot SVG ──
-function plotSvg() {
-  const warn = document.getElementById("svg-warn");
-  warn.textContent = "";
-  const transformed = getTransformedPaths();
-  if (transformed.length === 0) {
-    warn.textContent = "No SVG loaded.";
-    return;
-  }
-
-  const b = getBounds();
-  const speed = parseFloat(document.getElementById("svg-speed").value);
-
-  // Bounds check (with padding)
-  for (const path of transformed) {
-    for (const pt of path) {
-      if (pt.x < b.minX || pt.x > b.maxX || pt.y < b.minY || pt.y > b.maxY) {
-        warn.textContent = `SVG exceeds safe area (${b.minX}-${b.maxX}, ${b.minY}-${b.maxY})! Adjust offset or scale.`;
-        return;
-      }
-    }
-  }
-
-  const penUpZ = getPenUpZ();
-  const penDownZ = getPenDownZ();
-  const zSpeed = getPenZSpeed();
-
-  // Count total commands for progress tracking
-  let totalCmds = 2; // G90 + initial pen up
-  for (const path of transformed) {
-    if (path.length < 2) continue;
-    totalCmds += 1 + 1 + (path.length - 1) + 1; // move to start + pen down + draws + pen up
-  }
-
-  startJob(totalCmds);
-
-  send("G90");
-  send(`G1 Z${penUpZ} F${zSpeed}`);
-
-  for (const path of transformed) {
-    if (path.length < 2) continue;
-
-    send(`G1 X${path[0].x.toFixed(2)} Y${path[0].y.toFixed(2)} F${speed}`);
-    send(`G1 Z${penDownZ} F${zSpeed}`);
-
-    for (let i = 1; i < path.length; i++) {
-      send(`G1 X${path[i].x.toFixed(2)} Y${path[i].y.toFixed(2)} F${speed}`);
-    }
-
-    send(`G1 Z${penUpZ} F${zSpeed}`);
-  }
-
-  addLine(`Plotting ${transformed.length} paths (${totalCmds} commands)`, "info");
-}
-
-// ── Init ──
-connect();
-renderPreview();
-</script>
+<script src="/static/plotter.js"></script>
+<script src="/static/preview.js"></script>
+<script src="/static/app.js"></script>
 
 </body>
 </html>

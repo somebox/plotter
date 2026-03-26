@@ -1,11 +1,16 @@
 import asyncio
 import json
+import math
+import re
 import serial
 import serial.tools.list_ports
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from io import BytesIO
+from xml.etree import ElementTree as ET
+
+from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 
 BAUD_RATE = 115200
 SERIAL_PORT = "/dev/ttyUSB0"
@@ -233,11 +238,28 @@ async def lifespan(app: FastAPI):
 
     reader_task = asyncio.create_task(serial_reader())
     sender_task = asyncio.create_task(command_sender())
-    yield
-    reader_task.cancel()
-    sender_task.cancel()
-    if ser and ser.is_open:
-        ser.close()
+    try:
+        yield
+    finally:
+        reader_task.cancel()
+        sender_task.cancel()
+        for task in (reader_task, sender_task):
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        for ws in clients[:]:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+        clients.clear()
+        if ser and ser.is_open:
+            try:
+                ser.close()
+                print("Serial port closed.", flush=True)
+            except Exception:
+                pass
 
 
 app = FastAPI(lifespan=lifespan)
@@ -292,9 +314,303 @@ async def list_ports():
     return [{"device": p.device, "description": p.description} for p in ports]
 
 
+# ── SVG preprocessing ──
+
+
+def parse_svg_path_to_subpaths(d_attr):
+    """Parse an SVG path d attribute into a list of subpaths (list of (x,y) tuples).
+    Handles M, L, H, V, C, S, Q, T, Z commands (absolute and relative)."""
+    subpaths = []
+    current = []
+    x, y = 0.0, 0.0
+    start_x, start_y = 0.0, 0.0
+
+    # Tokenize: split into commands and their numeric arguments
+    tokens = re.findall(r'[MmLlHhVvCcSsQqTtAaZz]|[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?', d_attr)
+
+    i = 0
+    cmd = 'M'
+
+    def next_num():
+        nonlocal i
+        while i < len(tokens) and tokens[i] in 'MmLlHhVvCcSsQqTtAaZz':
+            i += 1
+        if i < len(tokens):
+            val = float(tokens[i])
+            i += 1
+            return val
+        return 0.0
+
+    while i < len(tokens):
+        t = tokens[i]
+        if t in 'MmLlHhVvCcSsQqTtAaZz':
+            cmd = t
+            i += 1
+        # else: implicit repeat of last command
+
+        if cmd == 'M':
+            if current and len(current) >= 2:
+                subpaths.append(current)
+            x, y = next_num(), next_num()
+            start_x, start_y = x, y
+            current = [(x, y)]
+            cmd = 'L'  # subsequent coords are line-to
+        elif cmd == 'm':
+            if current and len(current) >= 2:
+                subpaths.append(current)
+            x += next_num()
+            y += next_num()
+            start_x, start_y = x, y
+            current = [(x, y)]
+            cmd = 'l'
+        elif cmd == 'L':
+            x, y = next_num(), next_num()
+            current.append((x, y))
+        elif cmd == 'l':
+            x += next_num()
+            y += next_num()
+            current.append((x, y))
+        elif cmd == 'H':
+            x = next_num()
+            current.append((x, y))
+        elif cmd == 'h':
+            x += next_num()
+            current.append((x, y))
+        elif cmd == 'V':
+            y = next_num()
+            current.append((x, y))
+        elif cmd == 'v':
+            y += next_num()
+            current.append((x, y))
+        elif cmd == 'C':
+            next_num(); next_num()  # cp1
+            next_num(); next_num()  # cp2
+            x, y = next_num(), next_num()
+            current.append((x, y))
+        elif cmd == 'c':
+            next_num(); next_num()
+            next_num(); next_num()
+            dx, dy = next_num(), next_num()
+            x += dx; y += dy
+            current.append((x, y))
+        elif cmd == 'S':
+            next_num(); next_num()
+            x, y = next_num(), next_num()
+            current.append((x, y))
+        elif cmd == 's':
+            next_num(); next_num()
+            dx, dy = next_num(), next_num()
+            x += dx; y += dy
+            current.append((x, y))
+        elif cmd == 'Q':
+            next_num(); next_num()
+            x, y = next_num(), next_num()
+            current.append((x, y))
+        elif cmd == 'q':
+            next_num(); next_num()
+            dx, dy = next_num(), next_num()
+            x += dx; y += dy
+            current.append((x, y))
+        elif cmd == 'T':
+            x, y = next_num(), next_num()
+            current.append((x, y))
+        elif cmd == 't':
+            dx, dy = next_num(), next_num()
+            x += dx; y += dy
+            current.append((x, y))
+        elif cmd == 'A':
+            next_num(); next_num(); next_num(); next_num(); next_num()
+            x, y = next_num(), next_num()
+            current.append((x, y))
+        elif cmd == 'a':
+            next_num(); next_num(); next_num(); next_num(); next_num()
+            dx, dy = next_num(), next_num()
+            x += dx; y += dy
+            current.append((x, y))
+        elif cmd in ('Z', 'z'):
+            if current:
+                current.append((start_x, start_y))
+                if len(current) >= 2:
+                    subpaths.append(current)
+                current = []
+            x, y = start_x, start_y
+        else:
+            i += 1  # skip unknown
+
+    if current and len(current) >= 2:
+        subpaths.append(current)
+
+    return subpaths
+
+
+def apply_transform(subpaths, transform_str):
+    """Apply a simple SVG transform string (translate, scale) to subpaths."""
+    if not transform_str:
+        return subpaths
+
+    result = subpaths
+    # Process transforms right-to-left (inner-most first)
+    transforms = re.findall(r'(translate|scale|matrix)\(([^)]+)\)', transform_str)
+    for ttype, args in reversed(transforms):
+        nums = [float(x) for x in re.findall(r'[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?', args)]
+        if ttype == 'translate':
+            tx = nums[0] if len(nums) > 0 else 0
+            ty = nums[1] if len(nums) > 1 else 0
+            result = [[(x + tx, y + ty) for x, y in sp] for sp in result]
+        elif ttype == 'scale':
+            sx = nums[0] if len(nums) > 0 else 1
+            sy = nums[1] if len(nums) > 1 else sx
+            result = [[(x * sx, y * sy) for x, y in sp] for sp in result]
+        elif ttype == 'matrix' and len(nums) == 6:
+            a, b, c, d, e, f = nums
+            result = [[(a*x + c*y + e, b*x + d*y + f) for x, y in sp] for sp in result]
+
+    return result
+
+
+def douglas_peucker(points, tolerance):
+    """Simplify a polyline using Douglas-Peucker algorithm."""
+    if len(points) <= 2 or tolerance <= 0:
+        return points
+
+    max_dist = 0
+    max_idx = 0
+    first, last = points[0], points[-1]
+    dx, dy = last[0] - first[0], last[1] - first[1]
+    len_sq = dx * dx + dy * dy
+
+    for i in range(1, len(points) - 1):
+        px, py = points[i]
+        if len_sq == 0:
+            dist = math.sqrt((px - first[0])**2 + (py - first[1])**2)
+        else:
+            t = max(0, min(1, ((px - first[0]) * dx + (py - first[1]) * dy) / len_sq))
+            proj_x, proj_y = first[0] + t * dx, first[1] + t * dy
+            dist = math.sqrt((px - proj_x)**2 + (py - proj_y)**2)
+        if dist > max_dist:
+            max_dist = dist
+            max_idx = i
+
+    if max_dist > tolerance:
+        left = douglas_peucker(points[:max_idx + 1], tolerance)
+        right = douglas_peucker(points[max_idx:], tolerance)
+        return left[:-1] + right
+    return [first, last]
+
+
+@app.post("/api/preprocess-svg")
+async def preprocess_svg(file: UploadFile = File(...), simplify: float = Form(0.0)):
+    """Parse SVG server-side, split mega-paths into subpaths, return polylines."""
+    content = await file.read()
+    try:
+        tree = ET.parse(BytesIO(content))
+    except Exception as e:
+        return JSONResponse({"error": f"SVG parse error: {e}"}, status_code=400)
+
+    root = tree.getroot()
+
+    # Collect all paths with their accumulated transforms
+    all_subpaths = []
+
+    def walk(el, parent_transform=""):
+        tag = el.tag.split('}')[-1]
+        el_transform = el.get('transform', '')
+        combined = (parent_transform + " " + el_transform).strip()
+
+        if tag == 'path':
+            d = el.get('d', '')
+            if d:
+                subpaths = parse_svg_path_to_subpaths(d)
+                if combined:
+                    subpaths = apply_transform(subpaths, combined)
+                all_subpaths.extend(subpaths)
+        elif tag in ('line', 'polyline', 'polygon', 'rect'):
+            # Convert simple shapes to points
+            pts = []
+            if tag == 'line':
+                pts = [(float(el.get('x1', 0)), float(el.get('y1', 0))),
+                       (float(el.get('x2', 0)), float(el.get('y2', 0)))]
+            elif tag == 'rect':
+                x, y = float(el.get('x', 0)), float(el.get('y', 0))
+                w, h = float(el.get('width', 0)), float(el.get('height', 0))
+                pts = [(x, y), (x+w, y), (x+w, y+h), (x, y+h), (x, y)]
+            elif tag in ('polyline', 'polygon'):
+                raw = el.get('points', '').strip()
+                nums = re.findall(r'[-+]?(?:\d+\.?\d*|\.\d+)', raw)
+                for j in range(0, len(nums) - 1, 2):
+                    pts.append((float(nums[j]), float(nums[j+1])))
+                if tag == 'polygon' and pts:
+                    pts.append(pts[0])
+
+            if len(pts) >= 2:
+                sp = [pts]
+                if combined:
+                    sp = apply_transform(sp, combined)
+                all_subpaths.extend(sp)
+
+        for child in el:
+            walk(child, combined)
+
+    walk(root)
+
+    # Auto-compute tolerance if not provided: 0.1% of the bbox diagonal
+    if simplify <= 0:
+        min_x0 = min(p[0] for sp in all_subpaths for p in sp) if all_subpaths else 0
+        min_y0 = min(p[1] for sp in all_subpaths for p in sp) if all_subpaths else 0
+        max_x0 = max(p[0] for sp in all_subpaths for p in sp) if all_subpaths else 0
+        max_y0 = max(p[1] for sp in all_subpaths for p in sp) if all_subpaths else 0
+        diag = math.sqrt((max_x0 - min_x0)**2 + (max_y0 - min_y0)**2)
+        simplify = diag * 0.001  # 0.1% of diagonal
+
+    simplified = []
+    for sp in all_subpaths:
+        s = douglas_peucker(sp, simplify)
+        if len(s) >= 2:
+            # Round to 2 decimal places to reduce JSON size
+            simplified.append([[round(x, 2), round(y, 2)] for x, y in s])
+
+    # Compute bbox
+    min_x = min_y = 0.0
+    max_x = max_y = 0.0
+    total_pts = 0
+    if simplified:
+        min_x = min_y = float('inf')
+        max_x = max_y = float('-inf')
+        for sp in simplified:
+            for x, y in sp:
+                min_x = min(min_x, x)
+                min_y = min(min_y, y)
+                max_x = max(max_x, x)
+                max_y = max(max_y, y)
+            total_pts += len(sp)
+
+    return {
+        "paths": simplified,
+        "bbox": {"minX": min_x, "minY": min_y, "maxX": max_x, "maxY": max_y},
+        "stats": {
+            "original_paths": len(all_subpaths),
+            "simplified_paths": len(simplified),
+            "total_points": total_pts,
+        }
+    }
+
+
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 @app.get("/")
 async def index():
     return FileResponse("static/index.html")
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "server:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        reload_dirs=["."],
+        reload_includes=["*.py", "*.html", "*.js", "*.css"],
+    )
