@@ -168,6 +168,164 @@ class TestPreprocessSvgEndpoint:
         # 0.01 deviation on 1414 diagonal = auto tolerance ~1.4, should simplify
         assert data["stats"]["total_points"] == 2
 
+    @pytest.mark.anyio
+    async def test_filled_default_black(self, client):
+        """Paths without fill attribute default to 0.0 (black)."""
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+            '<rect x="10" y="10" width="80" height="80"/>'
+            '</svg>'
+        )
+        resp = await client.post(
+            "/api/preprocess-svg",
+            files={"file": ("f.svg", svg.encode(), "image/svg+xml")},
+            data={"simplify": "0"},
+        )
+        data = resp.json()
+        assert "filled" in data
+        assert all(f == pytest.approx(0.0, abs=0.01) for f in data["filled"])
+
+    @pytest.mark.anyio
+    async def test_filled_fill_none(self, client):
+        """Paths with fill='none' get filled=None."""
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+            '<rect x="10" y="10" width="80" height="80" fill="none" stroke="black"/>'
+            '</svg>'
+        )
+        resp = await client.post(
+            "/api/preprocess-svg",
+            files={"file": ("fn.svg", svg.encode(), "image/svg+xml")},
+            data={"simplify": "0"},
+        )
+        data = resp.json()
+        assert all(f is None for f in data["filled"])
+
+    @pytest.mark.anyio
+    async def test_filled_style_fill_none(self, client):
+        """Paths with style='fill:none' get filled=None."""
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+            '<path d="M 0 0 L 50 50 L 100 0 Z" style="fill:none;stroke:black"/>'
+            '</svg>'
+        )
+        resp = await client.post(
+            "/api/preprocess-svg",
+            files={"file": ("sn.svg", svg.encode(), "image/svg+xml")},
+            data={"simplify": "0"},
+        )
+        data = resp.json()
+        assert all(f is None for f in data["filled"])
+
+    @pytest.mark.anyio
+    async def test_filled_inherited_from_group(self, client):
+        """fill='none' on parent <g> is inherited by children."""
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+            '<g fill="none" stroke="black">'
+            '<rect x="10" y="10" width="80" height="80"/>'
+            '</g>'
+            '</svg>'
+        )
+        resp = await client.post(
+            "/api/preprocess-svg",
+            files={"file": ("gi.svg", svg.encode(), "image/svg+xml")},
+            data={"simplify": "0"},
+        )
+        data = resp.json()
+        assert all(f is None for f in data["filled"])
+
+    @pytest.mark.anyio
+    async def test_filled_grey_returns_brightness(self, client):
+        """Grey fill returns a brightness value between 0 and 1."""
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+            '<rect x="10" y="10" width="80" height="80" fill="#808080"/>'
+            '</svg>'
+        )
+        resp = await client.post(
+            "/api/preprocess-svg",
+            files={"file": ("grey.svg", svg.encode(), "image/svg+xml")},
+            data={"simplify": "0"},
+        )
+        data = resp.json()
+        # #808080 = rgb(128,128,128) → brightness ≈ 0.502
+        assert data["filled"][0] == pytest.approx(0.502, abs=0.01)
+
+    @pytest.mark.anyio
+    async def test_svg_with_circle(self, client):
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+            '<circle cx="50" cy="50" r="20" fill="none" stroke="black"/>'
+            '</svg>'
+        )
+        resp = await client.post(
+            "/api/preprocess-svg",
+            files={"file": ("circ.svg", svg.encode(), "image/svg+xml")},
+            data={"simplify": "0"},
+        )
+        data = resp.json()
+        assert data["stats"]["simplified_paths"] == 1
+        assert data["stats"]["total_points"] >= 12
+        # Check path forms a closed loop around (50,50) with radius 20
+        path = data["paths"][0]
+        for x, y in path:
+            dist = ((x - 50) ** 2 + (y - 50) ** 2) ** 0.5
+            assert dist == pytest.approx(20, abs=0.5)
+
+    @pytest.mark.anyio
+    async def test_svg_with_ellipse(self, client):
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+            '<ellipse cx="50" cy="50" rx="30" ry="15" fill="none" stroke="black"/>'
+            '</svg>'
+        )
+        resp = await client.post(
+            "/api/preprocess-svg",
+            files={"file": ("ell.svg", svg.encode(), "image/svg+xml")},
+            data={"simplify": "0"},
+        )
+        data = resp.json()
+        assert data["stats"]["simplified_paths"] == 1
+        assert data["stats"]["total_points"] >= 12
+
+    @pytest.mark.anyio
+    async def test_svg_with_filled_circle(self, client):
+        """Circle with fill='black' should report brightness 0.0."""
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+            '<circle cx="50" cy="50" r="5" fill="black"/>'
+            '</svg>'
+        )
+        resp = await client.post(
+            "/api/preprocess-svg",
+            files={"file": ("fc.svg", svg.encode(), "image/svg+xml")},
+            data={"simplify": "0"},
+        )
+        data = resp.json()
+        assert data["stats"]["simplified_paths"] == 1
+        assert data["filled"][0] == pytest.approx(0.0, abs=0.01)
+
+    @pytest.mark.anyio
+    async def test_filled_mixed_colors(self, client):
+        """Mix of filled, unfilled, and colored elements."""
+        svg = (
+            '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+            '<rect x="0" y="0" width="50" height="50" fill="black"/>'
+            '<rect x="50" y="0" width="50" height="50" fill="#cccccc"/>'
+            '<rect x="0" y="50" width="50" height="50" fill="none" stroke="black"/>'
+            '</svg>'
+        )
+        resp = await client.post(
+            "/api/preprocess-svg",
+            files={"file": ("mix.svg", svg.encode(), "image/svg+xml")},
+            data={"simplify": "0"},
+        )
+        data = resp.json()
+        assert data["filled"][0] == pytest.approx(0.0, abs=0.01)   # black
+        assert data["filled"][1] == pytest.approx(0.8, abs=0.01)    # light grey
+        assert data["filled"][2] is None                              # none
+
 
 # ── Static file serving ──
 

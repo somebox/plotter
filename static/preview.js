@@ -8,30 +8,82 @@ function bedToCanvas(bx, by, cw, ch, bedX, bedY) {
   return { x: bx * (cw / bedX), y: ch - by * (ch / bedY) };
 }
 
-// Draw SVG paths onto the canvas (for import preview, not during a job)
+// Convert pen size (mm) to canvas pixel line width
+function penSizeToPixels(penSize, cw, ch, bedX, bedY) {
+  if (!penSize || penSize <= 0) return 1.5;
+  const avgScale = (cw / bedX + ch / bedY) / 2;
+  return Math.max(0.5, penSize * avgScale);
+}
+
+// Draw SVG paths onto the canvas (for import preview, not during a job).
+// Filled regions are shown with a semi-transparent fill and lighter outlines;
+// stroke-only paths are drawn in full blue.
 function drawPathsOnCanvas(ctx, opts, fromIdx) {
-  const { svgPaths, svgBBox, bedX, bedY, scale, ox, oy } = opts;
+  const { svgPaths, svgFilled, svgBBox, bedX, bedY, scale, ox, oy } = opts;
   if (!svgPaths.length || !svgBBox) return;
   const svgH = svgBBox.maxY - svgBBox.minY;
   const cw = ctx.canvas.width, ch = ctx.canvas.height;
   const scaleX = cw / bedX, scaleY = ch / bedY;
+  const penPx = penSizeToPixels(opts.penSize, cw, ch, bedX, bedY);
 
-  ctx.strokeStyle = "#2471a3";
-  ctx.lineWidth = 1.5;
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
+  function toPx(pt) {
+    return {
+      x: ((pt.x - svgBBox.minX) * scale + ox) * scaleX,
+      y: ch - ((svgH - (pt.y - svgBBox.minY)) * scale + oy) * scaleY,
+    };
+  }
 
-  ctx.beginPath();
-  for (let p = fromIdx; p < svgPaths.length; p++) {
-    const path = svgPaths[p];
+  function tracePath(path) {
     for (let i = 0; i < path.length; i++) {
-      const tx = ((path[i].x - svgBBox.minX) * scale + ox) * scaleX;
-      const ty = ch - ((svgH - (path[i].y - svgBBox.minY)) * scale + oy) * scaleY;
-      if (i === 0) ctx.moveTo(tx, ty);
-      else ctx.lineTo(tx, ty);
+      const p = toPx(path[i]);
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
     }
   }
+
+  const hasFilled = svgFilled && svgFilled.length === svgPaths.length;
+
+  // Pass 1: Draw filled regions with a visible blue tint.  Darker SVG fills
+  // get more opaque; lighter fills get less opaque but remain visible.
+  if (hasFilled) {
+    for (let p = fromIdx; p < svgPaths.length; p++) {
+      if (svgFilled[p] === null || svgFilled[p] === undefined) continue;
+      const path = svgPaths[p];
+      if (path.length < 3) continue;
+      const brightness = svgFilled[p];
+      const alpha = (0.15 + (1 - brightness) * 0.30).toFixed(2);
+      ctx.fillStyle = `rgba(80, 140, 210, ${alpha})`;
+      ctx.beginPath();
+      tracePath(path);
+      ctx.fill();
+    }
+  }
+
+  // Pass 2: Stroke non-filled paths (blue, full weight)
+  ctx.strokeStyle = "#2471a3";
+  ctx.lineWidth = penPx;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  for (let p = fromIdx; p < svgPaths.length; p++) {
+    if (hasFilled && svgFilled[p] !== null && svgFilled[p] !== undefined) continue;
+    tracePath(svgPaths[p]);
+  }
   ctx.stroke();
+
+  // Pass 3: Filled-path outlines — very faint so the fill dominates
+  if (hasFilled) {
+    ctx.strokeStyle = "rgba(36, 113, 163, 0.10)";
+    ctx.lineWidth = Math.max(0.3, penPx * 0.3);
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    for (let p = fromIdx; p < svgPaths.length; p++) {
+      if (svgFilled[p] === null || svgFilled[p] === undefined) continue;
+      tracePath(svgPaths[p]);
+    }
+    ctx.stroke();
+  }
 }
 
 // ── Progress Rendering ──
@@ -80,6 +132,7 @@ function drawProgressPaths(ctx, opts) {
   const { bedX, bedY, jobPlotPaths, camZoom } = opts;
   const cw = ctx.canvas.width, ch = ctx.canvas.height;
   const scaleX = cw / bedX, scaleY = ch / bedY;
+  const penPx = penSizeToPixels(opts.penSize, cw, ch, bedX, bedY);
   const state = computeDrawState(opts.jobCommandMap, jobPlotPaths, opts.jobCurrentCmd);
   const { completedUpToPath, currentPath, currentPoint, headX, headY } = state;
 
@@ -88,7 +141,7 @@ function drawProgressPaths(ctx, opts) {
 
   // Pass 1: Completed paths — green
   ctx.strokeStyle = "#27ae60";
-  ctx.lineWidth = 1.5;
+  ctx.lineWidth = penPx;
   ctx.beginPath();
   for (let p = 0; p <= completedUpToPath && p < jobPlotPaths.length; p++) {
     const path = jobPlotPaths[p];
@@ -103,7 +156,7 @@ function drawProgressPaths(ctx, opts) {
   // Pass 1b: Partial current path (completed portion) — green
   if (currentPath > completedUpToPath && currentPath >= 0) {
     ctx.strokeStyle = "#27ae60";
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = penPx;
     ctx.beginPath();
     const path = jobPlotPaths[currentPath];
     for (let i = 0; i <= currentPoint && i < path.length; i++) {
@@ -116,7 +169,7 @@ function drawProgressPaths(ctx, opts) {
 
   // Pass 2: Pending segments — dimmed
   ctx.strokeStyle = "rgba(36, 113, 163, 0.25)";
-  ctx.lineWidth = 1;
+  ctx.lineWidth = penPx;
   ctx.beginPath();
   // Remainder of current path
   if (currentPath >= 0 && currentPoint < jobPlotPaths[currentPath].length - 1) {
@@ -148,6 +201,29 @@ function drawProgressPaths(ctx, opts) {
     ctx.arc(head.x, head.y, r, 0, Math.PI * 2);
     ctx.fill();
   }
+}
+
+// Draw fill pattern preview (paths already in printer bed coordinates)
+function drawFillPreview(ctx, opts) {
+  const { bedX, bedY, fillPaths } = opts;
+  if (!fillPaths || !fillPaths.length) return;
+  const cw = ctx.canvas.width, ch = ctx.canvas.height;
+  const penPx = penSizeToPixels(opts.penSize, cw, ch, bedX, bedY);
+
+  ctx.strokeStyle = "rgba(155, 89, 182, 0.5)";
+  ctx.lineWidth = penPx;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+
+  ctx.beginPath();
+  for (const path of fillPaths) {
+    for (let i = 0; i < path.length; i++) {
+      const pt = bedToCanvas(path[i].x, path[i].y, cw, ch, bedX, bedY);
+      if (i === 0) ctx.moveTo(pt.x, pt.y);
+      else ctx.lineTo(pt.x, pt.y);
+    }
+  }
+  ctx.stroke();
 }
 
 // ── Main Render ──
@@ -216,6 +292,11 @@ function renderPreview(ctx, opts) {
   }
   for (let y = 50; y <= bedY; y += 50) {
     ctx.fillText(y, 2 / z, ch - y * scaleY + 10 / z);
+  }
+
+  // Draw fill preview (when not in a job and fill paths are provided)
+  if (!hasJob && opts.fillPaths && opts.fillPaths.length > 0) {
+    drawFillPreview(ctx, opts);
   }
 
   // Draw paths — either progress overlay or plain SVG preview

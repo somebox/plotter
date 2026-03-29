@@ -170,6 +170,216 @@ function optimizePaths(paths, simplifyTol, mergeGap) {
   return result;
 }
 
+// ── Fill Pattern Generation ──
+
+// Check if a path is closed (first point ≈ last point within epsilon).
+// Default epsilon is 1mm to tolerate sampling resolution gaps from
+// getPointAtLength-based parsing.
+function isClosedPath(path, epsilon) {
+  if (path.length < 3) return false;
+  if (epsilon === undefined) epsilon = 1.0;
+  const dx = path[0].x - path[path.length - 1].x;
+  const dy = path[0].y - path[path.length - 1].y;
+  return (dx * dx + dy * dy) <= epsilon * epsilon;
+}
+
+// Compute the area of a polygon using the shoelace formula (absolute value).
+function polygonArea(path) {
+  let area = 0;
+  const n = path.length;
+  for (let i = 0; i < n - 1; i++) {
+    area += path[i].x * path[i + 1].y - path[i + 1].x * path[i].y;
+  }
+  return Math.abs(area) / 2;
+}
+
+// Find intersections of a horizontal scanline (at given y) with polygon edges.
+// Returns sorted array of x-coordinates where the scanline crosses edges.
+function scanlineIntersections(path, y) {
+  const xs = [];
+  const n = path.length;
+  for (let i = 0; i < n - 1; i++) {
+    const a = path[i], b = path[i + 1];
+    const minY = Math.min(a.y, b.y), maxY = Math.max(a.y, b.y);
+    // Skip horizontal edges and edges that don't straddle this y
+    if (a.y === b.y) continue;
+    if (y < minY || y >= maxY) continue;
+    // Linear interpolation for x at this y
+    const t = (y - a.y) / (b.y - a.y);
+    xs.push(a.x + t * (b.x - a.x));
+  }
+  xs.sort((a, b) => a - b);
+  return xs;
+}
+
+// Generate fill line paths for a single closed polygon.
+// spacing: distance between fill lines (mm)
+// angleDeg: angle of fill lines in degrees
+// Returns array of paths (each path is [{x,y}, {x,y}] line segments or zigzag chains).
+function hatchPolygon(path, spacing, angleDeg) {
+  if (path.length < 3 || spacing <= 0) return [];
+
+  const angle = (angleDeg * Math.PI) / 180;
+  const cosA = Math.cos(angle), sinA = Math.sin(angle);
+
+  // Rotate polygon so fill lines become horizontal
+  const rotated = path.map(p => ({
+    x: p.x * cosA + p.y * sinA,
+    y: -p.x * sinA + p.y * cosA,
+  }));
+
+  // Find bounding box of rotated polygon
+  let minY = Infinity, maxY = -Infinity;
+  for (const p of rotated) {
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+
+  // Offset scanlines by half-spacing so we don't start exactly on an edge
+  const startY = minY + spacing * 0.5;
+  const lines = [];
+  let zigzag = false;
+
+  for (let y = startY; y < maxY; y += spacing) {
+    const xs = scanlineIntersections(rotated, y);
+    // Pair intersections (even-odd rule)
+    for (let i = 0; i + 1 < xs.length; i += 2) {
+      // Rotate line segment back to original coordinate space
+      const x1 = xs[i], x2 = xs[i + 1];
+      if (zigzag) {
+        lines.push([
+          { x: x2 * cosA - y * sinA, y: x2 * sinA + y * cosA },
+          { x: x1 * cosA - y * sinA, y: x1 * sinA + y * cosA },
+        ]);
+      } else {
+        lines.push([
+          { x: x1 * cosA - y * sinA, y: x1 * sinA + y * cosA },
+          { x: x2 * cosA - y * sinA, y: x2 * sinA + y * cosA },
+        ]);
+      }
+    }
+    zigzag = !zigzag;
+  }
+
+  // Connect consecutive line segments into zigzag chains to reduce pen-up travel.
+  // If the end of one segment is close to the start of the next, merge them.
+  if (lines.length <= 1) return lines;
+  const chains = [lines[0].slice()];
+  for (let i = 1; i < lines.length; i++) {
+    const prev = chains[chains.length - 1];
+    const prevEnd = prev[prev.length - 1];
+    const curStart = lines[i][0];
+    const dx = curStart.x - prevEnd.x, dy = curStart.y - prevEnd.y;
+    // If gap is small (less than 2x spacing), connect into one chain
+    if (dx * dx + dy * dy <= (spacing * 2) * (spacing * 2)) {
+      for (const pt of lines[i]) prev.push(pt);
+    } else {
+      chains.push(lines[i].slice());
+    }
+  }
+  return chains;
+}
+
+// Point-in-polygon test using ray casting (even-odd rule)
+function pointInPolygon(x, y, path) {
+  let inside = false;
+  for (let i = 0, j = path.length - 1; i < path.length; j = i++) {
+    const xi = path[i].x, yi = path[i].y;
+    const xj = path[j].x, yj = path[j].y;
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+// Generate dot fill for a closed polygon.
+// Returns array of 2-point paths (pen touch at each dot location).
+function dotsPolygon(path, spacing, angleDeg) {
+  if (path.length < 3 || spacing <= 0) return [];
+
+  const angle = (angleDeg * Math.PI) / 180;
+  const cosA = Math.cos(angle), sinA = Math.sin(angle);
+
+  // Rotate polygon so grid aligns with angle
+  const rotated = path.map(p => ({
+    x: p.x * cosA + p.y * sinA,
+    y: -p.x * sinA + p.y * cosA,
+  }));
+
+  // Bounding box of rotated polygon
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of rotated) {
+    if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x; if (p.y > maxY) maxY = p.y;
+  }
+
+  const dots = [];
+  for (let y = minY + spacing * 0.5; y < maxY; y += spacing) {
+    for (let x = minX + spacing * 0.5; x < maxX; x += spacing) {
+      if (pointInPolygon(x, y, rotated)) {
+        // Rotate back to original coords
+        const ox = x * cosA - y * sinA;
+        const oy = x * sinA + y * cosA;
+        dots.push([{x: ox, y: oy}, {x: ox, y: oy}]);
+      }
+    }
+  }
+  return dots;
+}
+
+// Compute fill spacing by linearly interpolating between min and max spacing
+// based on brightness. Black (0.0) → minSpacing, white (1.0) → maxSpacing.
+// maxBrightness: skip fills lighter than this (default 0.95).
+// Returns 0 if brightness exceeds maxBrightness (too light to fill).
+function fillSpacingForBrightness(minSpacing, maxSpacing, brightness, maxBrightness) {
+  if (maxBrightness === undefined) maxBrightness = 0.95;
+  if (brightness >= maxBrightness) return 0;
+  return minSpacing + (maxSpacing - minSpacing) * brightness;
+}
+
+// Generate fill paths for all eligible closed paths in the input.
+// mode: "none", "hatch", "crosshatch", or "dots"
+// angleDeg: primary fill angle in degrees
+// filled: optional array — null = no fill, float = brightness (0=black, 1=white)
+// minArea: minimum polygon area (mm²) to qualify for fill (default 0)
+// minSpacing: tightest fill spacing in mm (used for black, brightness=0)
+// maxSpacing: widest fill spacing in mm (used for lightest fills)
+// maxBrightness: skip fills lighter than this (default 0.95)
+// Returns array of fill paths to be drawn before outlines.
+function generateFillPaths(paths, mode, angleDeg, filled, minArea, minSpacing, maxSpacing, maxBrightness) {
+  if (mode === "none" || !mode) return [];
+  if (minArea === undefined) minArea = 0;
+  if (minSpacing === undefined) minSpacing = 0.4;
+  if (maxSpacing === undefined) maxSpacing = 5.0;
+  if (maxBrightness === undefined) maxBrightness = 0.95;
+  const fills = [];
+  for (let i = 0; i < paths.length; i++) {
+    const path = paths[i];
+    if (!isClosedPath(path)) continue;
+    // filled[i] === null means no fill (fill="none" in SVG)
+    if (filled && filled[i] === null) continue;
+    if (minArea > 0 && polygonArea(path) < minArea) continue;
+
+    const brightness = (filled && filled[i] !== null && filled[i] !== undefined) ? filled[i] : 0.0;
+    const spacing = fillSpacingForBrightness(minSpacing, maxSpacing, brightness, maxBrightness);
+    if (spacing <= 0) continue; // too light to fill
+
+    if (mode === "dots") {
+      const dots = dotsPolygon(path, spacing, angleDeg);
+      for (const d of dots) fills.push(d);
+    } else {
+      const hatch = hatchPolygon(path, spacing, angleDeg);
+      for (const h of hatch) fills.push(h);
+      if (mode === "crosshatch") {
+        const cross = hatchPolygon(path, spacing, angleDeg + 90);
+        for (const h of cross) fills.push(h);
+      }
+    }
+  }
+  return fills;
+}
+
 // ── Coordinate Transforms ──
 
 // Transform SVG paths to printer coordinates (with Y flip)
@@ -319,6 +529,14 @@ if (typeof module !== "undefined") {
     sortPathsNearest,
     mergePaths,
     optimizePaths,
+    isClosedPath,
+    polygonArea,
+    pointInPolygon,
+    scanlineIntersections,
+    hatchPolygon,
+    dotsPolygon,
+    fillSpacingForBrightness,
+    generateFillPaths,
     transformPaths,
     computeFitToBed,
     checkBounds,

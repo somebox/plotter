@@ -8,6 +8,14 @@ const {
   sortPathsNearest,
   mergePaths,
   optimizePaths,
+  isClosedPath,
+  polygonArea,
+  pointInPolygon,
+  scanlineIntersections,
+  hatchPolygon,
+  dotsPolygon,
+  fillSpacingForBrightness,
+  generateFillPaths,
   transformPaths,
   computeFitToBed,
   checkBounds,
@@ -474,6 +482,317 @@ test("formatDuration: hours, minutes, seconds", () => {
 
 test("formatDuration: hours with zero minutes", () => {
   assert.strictEqual(formatDuration(3605000), "1h 0m 5s");
+});
+
+// ── isClosedPath ──
+
+test("isClosedPath: closed square returns true", () => {
+  const path = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  assert.strictEqual(isClosedPath(path), true);
+});
+
+test("isClosedPath: nearly closed (within epsilon) returns true", () => {
+  const path = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0.05,y:0.05}];
+  assert.strictEqual(isClosedPath(path, 0.1), true);
+});
+
+test("isClosedPath: open path returns false", () => {
+  const path = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}];
+  assert.strictEqual(isClosedPath(path), false);
+});
+
+test("isClosedPath: two-point path returns false", () => {
+  const path = [{x:0,y:0}, {x:0,y:0}];
+  assert.strictEqual(isClosedPath(path), false);
+});
+
+test("isClosedPath: empty path returns false", () => {
+  assert.strictEqual(isClosedPath([]), false);
+});
+
+// ── polygonArea ──
+
+test("polygonArea: unit square", () => {
+  const sq = [{x:0,y:0}, {x:1,y:0}, {x:1,y:1}, {x:0,y:1}, {x:0,y:0}];
+  assert.ok(Math.abs(polygonArea(sq) - 1) < 0.01);
+});
+
+test("polygonArea: 10x10 square", () => {
+  const sq = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  assert.ok(Math.abs(polygonArea(sq) - 100) < 0.01);
+});
+
+test("polygonArea: triangle", () => {
+  const tri = [{x:0,y:0}, {x:10,y:0}, {x:5,y:10}, {x:0,y:0}];
+  assert.ok(Math.abs(polygonArea(tri) - 50) < 0.01);
+});
+
+test("polygonArea: degenerate (line) returns 0", () => {
+  const line = [{x:0,y:0}, {x:10,y:0}, {x:0,y:0}];
+  assert.ok(polygonArea(line) < 0.01);
+});
+
+// ── scanlineIntersections ──
+
+test("scanlineIntersections: horizontal line through square", () => {
+  const square = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  const xs = scanlineIntersections(square, 5);
+  assert.strictEqual(xs.length, 2);
+  assert.ok(Math.abs(xs[0] - 0) < 0.01);
+  assert.ok(Math.abs(xs[1] - 10) < 0.01);
+});
+
+test("scanlineIntersections: line at bottom edge of square (y=0)", () => {
+  const square = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  // y=0 intersects the vertical edges (left: 0,0->0,10 and right: 10,0->10,10)
+  // but not the horizontal bottom edge (skipped since a.y === b.y)
+  const xs = scanlineIntersections(square, 0);
+  assert.strictEqual(xs.length, 2);
+  assert.ok(Math.abs(xs[0] - 0) < 0.01);
+  assert.ok(Math.abs(xs[1] - 10) < 0.01);
+});
+
+test("scanlineIntersections: triangle produces two intersections", () => {
+  const tri = [{x:5,y:0}, {x:10,y:10}, {x:0,y:10}, {x:5,y:0}];
+  const xs = scanlineIntersections(tri, 5);
+  assert.strictEqual(xs.length, 2);
+  // At y=5, left edge goes from (5,0)->(0,10), right from (5,0)->(10,10)
+  assert.ok(xs[0] < xs[1]);
+});
+
+test("scanlineIntersections: line outside polygon returns empty", () => {
+  const square = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  const xs = scanlineIntersections(square, 15);
+  assert.strictEqual(xs.length, 0);
+});
+
+// ── hatchPolygon ──
+
+test("hatchPolygon: square with 0° angle produces horizontal lines", () => {
+  const square = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  const lines = hatchPolygon(square, 2, 0);
+  assert.ok(lines.length > 0);
+  // All fill lines should be within the square bounds
+  for (const line of lines) {
+    for (const pt of line) {
+      assert.ok(pt.x >= -0.01 && pt.x <= 10.01, `x=${pt.x} out of bounds`);
+      assert.ok(pt.y >= -0.01 && pt.y <= 10.01, `y=${pt.y} out of bounds`);
+    }
+  }
+});
+
+test("hatchPolygon: square with 90° angle produces vertical lines", () => {
+  const square = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  const lines = hatchPolygon(square, 2, 90);
+  assert.ok(lines.length > 0);
+  for (const line of lines) {
+    for (const pt of line) {
+      assert.ok(pt.x >= -0.01 && pt.x <= 10.01, `x=${pt.x} out of bounds`);
+      assert.ok(pt.y >= -0.01 && pt.y <= 10.01, `y=${pt.y} out of bounds`);
+    }
+  }
+});
+
+test("hatchPolygon: smaller spacing produces more lines", () => {
+  const square = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  const sparse = hatchPolygon(square, 5, 0);
+  const dense = hatchPolygon(square, 1, 0);
+  // Dense hatching should have more total points than sparse
+  let sparsePoints = 0, densePoints = 0;
+  for (const l of sparse) sparsePoints += l.length;
+  for (const l of dense) densePoints += l.length;
+  assert.ok(densePoints > sparsePoints, `dense ${densePoints} should > sparse ${sparsePoints}`);
+});
+
+test("hatchPolygon: zero spacing returns empty", () => {
+  const square = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  assert.deepStrictEqual(hatchPolygon(square, 0, 0), []);
+});
+
+test("hatchPolygon: too-few points returns empty", () => {
+  assert.deepStrictEqual(hatchPolygon([{x:0,y:0}, {x:1,y:1}], 1, 0), []);
+});
+
+test("hatchPolygon: triangle produces lines within bounds", () => {
+  const tri = [{x:0,y:0}, {x:20,y:0}, {x:10,y:20}, {x:0,y:0}];
+  const lines = hatchPolygon(tri, 2, 0);
+  assert.ok(lines.length > 0);
+  for (const line of lines) {
+    for (const pt of line) {
+      assert.ok(pt.x >= -0.5 && pt.x <= 20.5, `x=${pt.x} out of triangle bounds`);
+      assert.ok(pt.y >= -0.5 && pt.y <= 20.5, `y=${pt.y} out of triangle bounds`);
+    }
+  }
+});
+
+// ── generateFillPaths ──
+// Signature: generateFillPaths(paths, mode, angleDeg, filled, minArea, minSpacing, maxSpacing)
+
+test("generateFillPaths: mode 'none' returns empty", () => {
+  const paths = [[{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}]];
+  assert.deepStrictEqual(generateFillPaths(paths, "none", 45), []);
+});
+
+test("generateFillPaths: hatch generates fills for closed paths only", () => {
+  const closed = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  const open = [{x:20,y:0}, {x:30,y:0}, {x:30,y:10}];
+  const fills = generateFillPaths([closed, open], "hatch", 45, null, 0, 2, 5);
+  assert.ok(fills.length > 0);
+  for (const f of fills) {
+    for (const pt of f) {
+      assert.ok(pt.x >= -1 && pt.x <= 11, `fill x=${pt.x} out of bounds`);
+      assert.ok(pt.y >= -1 && pt.y <= 11, `fill y=${pt.y} out of bounds`);
+    }
+  }
+});
+
+test("generateFillPaths: crosshatch generates more fills than hatch", () => {
+  const square = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  const hatch = generateFillPaths([square], "hatch", 45, null, 0, 2, 5);
+  const cross = generateFillPaths([square], "crosshatch", 45, null, 0, 2, 5);
+  let hatchPts = 0, crossPts = 0;
+  for (const l of hatch) hatchPts += l.length;
+  for (const l of cross) crossPts += l.length;
+  assert.ok(crossPts > hatchPts, `crosshatch ${crossPts} should > hatch ${hatchPts}`);
+});
+
+test("generateFillPaths: skips open paths entirely", () => {
+  const open = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}];
+  const fills = generateFillPaths([open], "hatch", 0, null, 0, 1, 5);
+  assert.strictEqual(fills.length, 0);
+});
+
+test("generateFillPaths: filled=null (no fill) skips closed path", () => {
+  const sq = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  const fills = generateFillPaths([sq], "hatch", 0, [null], 0, 2, 5);
+  assert.strictEqual(fills.length, 0);
+});
+
+test("generateFillPaths: filled=0.0 (black) fills with tightest spacing", () => {
+  const sq = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  const fills = generateFillPaths([sq], "hatch", 0, [0.0], 0, 2, 5);
+  assert.ok(fills.length > 0);
+});
+
+test("generateFillPaths: brightness 0.5 (grey) fills with wider spacing than black", () => {
+  const sq = [{x:0,y:0}, {x:20,y:0}, {x:20,y:20}, {x:0,y:20}, {x:0,y:0}];
+  const black = generateFillPaths([sq], "hatch", 0, [0.0], 0, 0.5, 5);
+  const grey = generateFillPaths([sq], "hatch", 0, [0.5], 0, 0.5, 5);
+  let blackPts = 0, greyPts = 0;
+  for (const l of black) blackPts += l.length;
+  for (const l of grey) greyPts += l.length;
+  assert.ok(blackPts > greyPts, `black ${blackPts} should have more points than grey ${greyPts}`);
+});
+
+test("generateFillPaths: brightness >= 0.95 (near white) skips fill", () => {
+  const sq = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  const fills = generateFillPaths([sq], "hatch", 0, [0.98], 0, 2, 5);
+  assert.strictEqual(fills.length, 0);
+});
+
+test("generateFillPaths: no filled array fills all closed paths (backward compat)", () => {
+  const sq = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  const fills = generateFillPaths([sq], "hatch", 0);
+  assert.ok(fills.length > 0);
+});
+
+test("generateFillPaths: smaller minSpacing produces tighter fill", () => {
+  const sq = [{x:0,y:0}, {x:20,y:0}, {x:20,y:20}, {x:0,y:20}, {x:0,y:0}];
+  const loose = generateFillPaths([sq], "hatch", 0, [0.0], 0, 2, 5);
+  const tight = generateFillPaths([sq], "hatch", 0, [0.0], 0, 0.5, 5);
+  let loosePts = 0, tightPts = 0;
+  for (const l of loose) loosePts += l.length;
+  for (const l of tight) tightPts += l.length;
+  assert.ok(tightPts > loosePts, `tight ${tightPts} should > loose ${loosePts}`);
+});
+
+test("generateFillPaths: minArea filters small polygons", () => {
+  const big = [{x:0,y:0}, {x:100,y:0}, {x:100,y:100}, {x:0,y:100}, {x:0,y:0}];
+  const tiny = [{x:0,y:0}, {x:1,y:0}, {x:1,y:1}, {x:0,y:1}, {x:0,y:0}];
+  const fills = generateFillPaths([big, tiny], "hatch", 0, null, 5, 5, 10);
+  assert.ok(fills.length > 0);
+  for (const f of fills) {
+    for (const pt of f) {
+      assert.ok(pt.x >= -1 && pt.x <= 101, `fill x=${pt.x} out of bounds`);
+    }
+  }
+});
+
+// ── pointInPolygon ──
+
+test("pointInPolygon: center of square is inside", () => {
+  const sq = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  assert.strictEqual(pointInPolygon(5, 5, sq), true);
+});
+
+test("pointInPolygon: outside square is outside", () => {
+  const sq = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  assert.strictEqual(pointInPolygon(15, 5, sq), false);
+});
+
+test("pointInPolygon: center of triangle is inside", () => {
+  const tri = [{x:5,y:0}, {x:10,y:10}, {x:0,y:10}, {x:5,y:0}];
+  assert.strictEqual(pointInPolygon(5, 7, tri), true);
+});
+
+// ── dotsPolygon ──
+
+test("dotsPolygon: generates dots inside square", () => {
+  const sq = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  const dots = dotsPolygon(sq, 2, 0);
+  assert.ok(dots.length > 0);
+  for (const d of dots) {
+    assert.strictEqual(d.length, 2);
+    assert.ok(d[0].x >= -0.5 && d[0].x <= 10.5);
+    assert.ok(d[0].y >= -0.5 && d[0].y <= 10.5);
+  }
+});
+
+test("dotsPolygon: smaller spacing produces more dots", () => {
+  const sq = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  const sparse = dotsPolygon(sq, 5, 0);
+  const dense = dotsPolygon(sq, 1, 0);
+  assert.ok(dense.length > sparse.length, `dense ${dense.length} should > sparse ${sparse.length}`);
+});
+
+test("generateFillPaths: dots mode generates dot fills", () => {
+  const sq = [{x:0,y:0}, {x:10,y:0}, {x:10,y:10}, {x:0,y:10}, {x:0,y:0}];
+  const fills = generateFillPaths([sq], "dots", 0, null, 0, 2, 5);
+  assert.ok(fills.length > 0);
+  // Each dot is a 2-point path
+  for (const d of fills) {
+    assert.strictEqual(d.length, 2);
+  }
+});
+
+// ── fillSpacingForBrightness ──
+// Signature: fillSpacingForBrightness(minSpacing, maxSpacing, brightness)
+
+test("fillSpacingForBrightness: black gives min spacing", () => {
+  const s = fillSpacingForBrightness(0.5, 5.0, 0.0);
+  assert.ok(Math.abs(s - 0.5) < 0.01);
+});
+
+test("fillSpacingForBrightness: mid grey gives midpoint spacing", () => {
+  const s = fillSpacingForBrightness(0.5, 5.0, 0.5);
+  assert.ok(Math.abs(s - 2.75) < 0.01);
+});
+
+test("fillSpacingForBrightness: near-white returns 0 (skip)", () => {
+  const s = fillSpacingForBrightness(0.5, 5.0, 0.96);
+  assert.strictEqual(s, 0);
+});
+
+test("fillSpacingForBrightness: smaller min spacing gives tighter fills for black", () => {
+  const tight = fillSpacingForBrightness(0.3, 5.0, 0.0);
+  const loose = fillSpacingForBrightness(1.0, 5.0, 0.0);
+  assert.ok(tight < loose);
+});
+
+test("fillSpacingForBrightness: larger max spacing gives wider fills for grey", () => {
+  const narrow = fillSpacingForBrightness(0.5, 3.0, 0.5);
+  const wide = fillSpacingForBrightness(0.5, 8.0, 0.5);
+  assert.ok(wide > narrow);
 });
 
 // ── Report ──

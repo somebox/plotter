@@ -38,6 +38,12 @@
 <!-- Terminal column -->
 <div id="terminal-col">
   <div id="console"></div>
+  <div id="serial-stats-bar">
+    <span id="serial-throughput" title="TX/RX bytes per second">-- B/s</span>
+    <span id="serial-saturation" title="Serial line saturation vs baud rate">0%</span>
+    <span id="serial-rtt" title="Average command round-trip time">RTT --</span>
+    <span id="serial-cmds" title="Commands per second">0 cmd/s</span>
+  </div>
   <div id="quick-bar">
     <button onclick="send('G28')">Home All</button>
     <button onclick="send('G28 X')">Home X</button>
@@ -74,15 +80,29 @@
       <label>Offset X (mm) <input type="number" id="svg-ox" value="10" min="0" step="1"></label>
       <label>Offset Y (mm) <input type="number" id="svg-oy" value="10" min="0" step="1"></label>
       <label>Scale <input type="number" id="svg-scale" value="1" min="0.01" step="0.1"></label>
-      <label>Speed <input type="number" id="svg-speed" value="1500" min="100" step="100"></label>
+      <label>Speed <input type="number" id="svg-speed" value="4500" min="100" max="8000" step="100"></label>
       <label>Resolution (mm) <input type="number" id="svg-res" value="0.5" min="0.1" step="0.1"></label>
       <label>Simplify (mm) <input type="number" id="svg-simplify" value="0.2" min="0" step="0.05"></label>
       <label>Merge gap (mm) <input type="number" id="svg-merge" value="1" min="0" step="0.5"></label>
+      <label>Fill
+        <select id="svg-fill-mode">
+          <option value="none">None</option>
+          <option value="hatch">Hatch</option>
+          <option value="crosshatch">Crosshatch</option>
+          <option value="dots">Dots</option>
+        </select>
+      </label>
+      <label>Fill angle (°) <input type="number" id="svg-fill-angle" value="45" min="0" max="180" step="5"></label>
+      <label>Min spacing (mm) <input type="number" id="svg-fill-min-spacing" value="0.4" min="0.1" max="10" step="0.1"></label>
+      <label>Max spacing (mm) <input type="number" id="svg-fill-max-spacing" value="5.0" min="0.5" max="20" step="0.5"></label>
+      <label>Max brightness <input type="number" id="svg-fill-max-brightness" value="0.8" min="0.05" max="1.0" step="0.05"></label>
+      <label>Min fill area (mm²) <input type="number" id="svg-fill-min-area" value="5" min="0" step="1"></label>
       <button onclick="fitToBed()">Fit to Bed</button>
+      <button onclick="renderPreview(ctx, getPreviewOpts())">Refresh</button>
       <button class="primary" onclick="plotSvg()">Plot SVG</button>
       <button onclick="clearSvg()">Clear</button>
       <div id="svg-warn" class="warn"></div>
-      <div class="info-text">Simplify: remove points within this tolerance. Merge: join paths closer than this gap. Both reduce commands.</div>
+      <div class="info-text">Simplify: remove points within this tolerance. Merge: join paths closer than this gap. Fill: shade closed regions based on SVG fill color brightness. Density scales fill tightness.</div>
     </div>
 
     <div class="panel" id="move-panel">
@@ -113,6 +133,15 @@
       <label>Up Z (mm) <input type="number" id="pen-up-z" value="2" min="0" step="0.5"></label>
       <label>Down Z (mm) <input type="number" id="pen-down-z" value="0" min="0" step="0.1"></label>
       <label>Z Speed <input type="number" id="pen-z-speed" value="300" min="50" step="50"></label>
+      <label>Safe Z (mm) <input type="number" id="pen-safe-z" value="40" min="0" step="5"></label>
+      <label>Pen Size (mm) <input type="number" id="pen-size" value="0.5" min="0.1" step="0.1"></label>
+      <div class="preset-row">
+        <button onclick="setPenSize(0.3)">Fine tip</button>
+        <button onclick="setPenSize(0.5)" class="primary">Pencil</button>
+        <button onclick="setPenSize(1.0)">Thin marker</button>
+        <button onclick="setPenSize(1.5)">Sharpie</button>
+        <button onclick="setPenSize(3.0)">Thick marker</button>
+      </div>
       <button class="primary" onclick="penUp()">Pen Up</button>
       <button class="primary" onclick="penDown()">Pen Down</button>
     </div>

@@ -56,6 +56,18 @@ header h1 { font-size: 1.2rem; }
   margin-bottom: 4px;
 }
 
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.preset-row button {
+  padding: 3px 8px;
+  font-size: 0.75rem;
+}
+
 /* ── Buttons ── */
 
 button {
@@ -219,6 +231,33 @@ button.danger:hover { background: #b03a2e; }
 #console .line-tx::before { content: "\25B6 "; color: #5dade2; }
 #console .line-err { color: #e74c3c; }
 #console .line-info { color: #888; font-style: italic; }
+
+/* ── Serial Stats Bar ── */
+
+#serial-stats-bar {
+  display: flex;
+  gap: 12px;
+  padding: 4px 8px;
+  background: #0f0f1a;
+  border: 1px solid #333;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-family: monospace;
+  color: #888;
+  flex-shrink: 0;
+}
+
+#serial-stats-bar span {
+  white-space: nowrap;
+}
+
+#serial-saturation {
+  font-weight: bold;
+}
+
+#serial-saturation.low { color: #27ae60; }
+#serial-saturation.mid { color: #f39c12; }
+#serial-saturation.high { color: #e74c3c; }
 
 /* ── Quick Command Bar ── */
 

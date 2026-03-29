@@ -19,6 +19,7 @@ let jobPlotPaths = null;
 let jobCurrentCmd = 0;
 
 let svgPaths = [];
+let svgFilled = [];
 let svgBBox = null;
 
 // Camera (zoom/pan)
@@ -42,6 +43,22 @@ function getPenUpZ() { return parseFloat(el("pen-up-z").value); }
 function getPenDownZ() { return parseFloat(el("pen-down-z").value); }
 function getPenZSpeed() { return parseFloat(el("pen-z-speed").value); }
 
+function computeFillPreview() {
+  if (!svgPaths.length || !svgBBox) return [];
+  const fillMode = el("svg-fill-mode").value;
+  if (fillMode === "none") return [];
+  const scale = numVal("svg-scale", 1);
+  const ox = numVal("svg-ox", 0);
+  const oy = numVal("svg-oy", 0);
+  const fillAngle = numVal("svg-fill-angle", 45);
+  const minArea = numVal("svg-fill-min-area", 5);
+  const minSpacing = numVal("svg-fill-min-spacing", 0.4);
+  const maxSpacing = numVal("svg-fill-max-spacing", 5.0);
+  const maxBrightness = numVal("svg-fill-max-brightness", 0.8);
+  const paths = transformPaths(svgPaths, svgBBox, scale, ox, oy);
+  return generateFillPaths(paths, fillMode, fillAngle, svgFilled, minArea, minSpacing, maxSpacing, maxBrightness);
+}
+
 function getPreviewOpts() {
   return {
     bedX: numVal("bed-x", 300),
@@ -51,6 +68,7 @@ function getPreviewOpts() {
     ox: numVal("svg-ox", 0),
     oy: numVal("svg-oy", 0),
     svgPaths,
+    svgFilled,
     svgBBox,
     jobCommandMap,
     jobPlotPaths,
@@ -58,6 +76,8 @@ function getPreviewOpts() {
     camZoom,
     camPanX,
     camPanY,
+    penSize: numVal("pen-size", 0.5),
+    fillPaths: computeFillPreview(),
   };
 }
 
@@ -113,6 +133,8 @@ function connect() {
       isPaused = false;
       updatePauseBtn();
       addLine("Resumed", "info");
+    } else if (msg.type === "serial_stats") {
+      updateSerialStats(msg);
     }
   };
   ws.onclose = () => {
@@ -153,6 +175,25 @@ function startJob(totalCommands) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "job_start", total: totalCommands }));
   }
+}
+
+// ── Serial Stats UI ──
+
+function formatBps(bps) {
+  if (bps >= 1000) return (bps / 1000).toFixed(1) + " KB/s";
+  return bps + " B/s";
+}
+
+function updateSerialStats(stats) {
+  el("serial-throughput").textContent = `TX ${formatBps(stats.tx_bps)} / RX ${formatBps(stats.rx_bps)}`;
+  const satEl = el("serial-saturation");
+  satEl.textContent = stats.saturation_pct.toFixed(1) + "%";
+  satEl.classList.remove("low", "mid", "high");
+  if (stats.saturation_pct >= 70) satEl.classList.add("high");
+  else if (stats.saturation_pct >= 30) satEl.classList.add("mid");
+  else satEl.classList.add("low");
+  el("serial-rtt").textContent = stats.avg_rtt_ms > 0 ? `RTT ${stats.avg_rtt_ms.toFixed(0)}ms` : "RTT --";
+  el("serial-cmds").textContent = stats.cmds_per_sec.toFixed(1) + " cmd/s";
 }
 
 // ── Queue & Progress UI ──
@@ -201,18 +242,16 @@ function updateProgress(sent, total, pct) {
       text.textContent += `  Elapsed: ${formatDuration(elapsed)}  ETA: ${formatDuration(remaining)}`;
     }
     schedulePreviewRedraw();
-    if (sent >= total) {
-      const elapsed = jobStartTime ? Date.now() - jobStartTime : 0;
+    if (sent >= total && jobStartTime !== null) {
+      const elapsed = Date.now() - jobStartTime;
       const timeStr = formatDuration(elapsed);
       text.textContent = `Complete!  Total time: ${timeStr}`;
       fill.style.width = "100%";
       pauseBtn.style.display = "none";
       addLine(`Job complete. Total time: ${timeStr}`, "info");
       jobStartTime = null;
-      // Return printer to origin with pen up
-      send("G90");
-      send(`G1 Z${getPenUpZ()} F${getPenZSpeed()}`);
-      send("G0 X0 Y0");
+      // Home all axes
+      send("G28");
       // Keep job paths visible briefly, then clear after final redraw
       setTimeout(() => {
         clearJobState();
@@ -293,6 +332,11 @@ function penDown() {
   s("G90");
   s(`G1 Z${getPenDownZ()} F${getPenZSpeed()}`);
   addLine("Pen down", "info");
+}
+
+function setPenSize(mm) {
+  el("pen-size").value = mm;
+  renderPreview(ctx, getPreviewOpts());
 }
 
 // ── Speed Override ──
@@ -391,6 +435,16 @@ async function parseSvgServer(file) {
   const formData = new FormData();
   formData.append("file", file);
   formData.append("simplify", el("svg-simplify").value || "0");
+  // Send fill parameters so server can pre-generate fill patterns
+  const fillMode = el("svg-fill-mode").value;
+  if (fillMode !== "none") {
+    formData.append("fill_mode", fillMode);
+    formData.append("fill_angle", el("svg-fill-angle").value);
+    formData.append("fill_min_spacing", el("svg-fill-min-spacing").value);
+    formData.append("fill_max_spacing", el("svg-fill-max-spacing").value);
+    formData.append("fill_max_brightness", el("svg-fill-max-brightness").value);
+    formData.append("fill_min_area", el("svg-fill-min-area").value);
+  }
 
   try {
     loadFill.style.width = "30%";
@@ -414,6 +468,7 @@ async function parseSvgServer(file) {
     loadText.textContent = "Building preview...";
 
     svgPaths = data.paths.map(sp => sp.map(([x, y]) => ({ x, y })));
+    svgFilled = data.filled || data.paths.map(() => 0.0);
     svgBBox = data.bbox;
 
     loadFill.style.width = "100%";
@@ -454,6 +509,7 @@ function parseSvg(svgText, filename) {
   document.body.appendChild(container);
 
   svgPaths = [];
+  svgFilled = [];
   svgBBox = null;
 
   const elements = svgEl.querySelectorAll("path, line, polyline, polygon, rect, circle, ellipse");
@@ -496,15 +552,33 @@ function parseSvg(svgText, filename) {
   function processBatch() {
     const deadline = performance.now() + 25;
     while (idx < total && performance.now() < deadline) {
-      const points = sampleElement(elements[idx], resolution, cachedCTM);
-      if (points.length >= 2) {
-        svgPaths.push(points);
-        totalPts += points.length;
-        for (const pt of points) {
-          if (pt.x < minX) minX = pt.x;
-          if (pt.y < minY) minY = pt.y;
-          if (pt.x > maxX) maxX = pt.x;
-          if (pt.y > maxY) maxY = pt.y;
+      const domEl = elements[idx];
+      const subpaths = sampleElement(domEl, resolution, cachedCTM);
+      if (subpaths.length > 0) {
+        // Resolve fill brightness: null = no fill, 0.0 = black, 1.0 = white
+        let fillBrightness = 0.0;
+        try {
+          const fill = getComputedStyle(domEl).fill;
+          if (!fill || fill === "none" || fill === "transparent") {
+            fillBrightness = null;
+          } else {
+            const m = fill.match(/(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+            if (m) {
+              const r = parseInt(m[1]), g = parseInt(m[2]), b = parseInt(m[3]);
+              fillBrightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0;
+            }
+          }
+        } catch (e) {}
+        for (const points of subpaths) {
+          svgPaths.push(points);
+          svgFilled.push(fillBrightness);
+          totalPts += points.length;
+          for (const pt of points) {
+            if (pt.x < minX) minX = pt.x;
+            if (pt.y < minY) minY = pt.y;
+            if (pt.x > maxX) maxX = pt.x;
+            if (pt.y > maxY) maxY = pt.y;
+          }
         }
       }
       idx++;
@@ -538,6 +612,9 @@ function parseSvg(svgText, filename) {
   requestAnimationFrame(processBatch);
 }
 
+// Sample an SVG element into point arrays. Returns an array of subpath arrays
+// (one per contiguous segment). Multi-subpath <path> elements (M...Z M...Z) are
+// split at discontinuities so connecting lines between subpaths are eliminated.
 function sampleElement(domEl, resolution, precomputedCTM) {
   const tag = domEl.tagName.toLowerCase();
   let pathEl;
@@ -592,11 +669,38 @@ function sampleElement(domEl, resolution, precomputedCTM) {
   }
 
   if (createdPath) pathEl.remove();
-  return points;
+  if (points.length < 2) return [];
+
+  // Detect subpath boundaries: compute inter-point distances and split at
+  // gaps much larger than the median (indicating a moveTo between subpaths).
+  const distsSq = [];
+  for (let i = 1; i < points.length; i++) {
+    const dx = points[i].x - points[i - 1].x;
+    const dy = points[i].y - points[i - 1].y;
+    distsSq.push(dx * dx + dy * dy);
+  }
+  const sorted = distsSq.slice().sort((a, b) => a - b);
+  const medianSq = sorted[Math.floor(sorted.length / 2)];
+  // Gap threshold: 5x median linear distance (25x squared). Floor prevents
+  // degenerate zero-median from splitting everything.
+  const gapSq = Math.max(medianSq * 25, 1e-6);
+
+  const subpaths = [];
+  let current = [points[0]];
+  for (let i = 1; i < points.length; i++) {
+    if (distsSq[i - 1] > gapSq) {
+      if (current.length >= 2) subpaths.push(current);
+      current = [];
+    }
+    current.push(points[i]);
+  }
+  if (current.length >= 2) subpaths.push(current);
+  return subpaths;
 }
 
 function clearSvg() {
   svgPaths = [];
+  svgFilled = [];
   svgBBox = null;
   el("svg-info").textContent = "";
   el("svg-warn").textContent = "";
@@ -654,9 +758,22 @@ function plotSvg() {
   let paths = transformPaths(svgPaths, svgBBox, scale, ox, oy);
 
   const b = getBounds();
-  const speed = numVal("svg-speed", 1500);
+  const speed = numVal("svg-speed", 4500);
   const simplifyTol = numVal("svg-simplify", 0);
   const mergeGap = numVal("svg-merge", 0);
+
+  // Generate fill patterns BEFORE optimization (svgFilled mapping is still 1:1)
+  const fillMode = el("svg-fill-mode").value;
+  const fillAngle = numVal("svg-fill-angle", 45);
+  const minArea = numVal("svg-fill-min-area", 5);
+  const minSpacing = numVal("svg-fill-min-spacing", 0.4);
+  const maxSpacing = numVal("svg-fill-max-spacing", 5.0);
+  const maxBrightness = numVal("svg-fill-max-brightness", 0.8);
+  const fillPaths = generateFillPaths(paths, fillMode, fillAngle, svgFilled, minArea, minSpacing, maxSpacing, maxBrightness);
+
+  if (fillPaths.length > 0) {
+    addLine(`Fill: ${fillPaths.length} hatch paths (${fillMode}, ${minSpacing}-${maxSpacing}mm spacing, ${fillAngle}°)`, "info");
+  }
 
   const origPaths = paths.length;
   let origPts = 0;
@@ -669,7 +786,13 @@ function plotSvg() {
   for (const p of paths) optPts += p.length;
   addLine(`Optimized: ${origPaths} → ${paths.length} paths, ${origPts} → ${optPts} points`, "info");
 
-  const boundsErr = checkBounds(paths, b);
+  // Optimize fill paths separately (sort for minimal travel, but don't merge — they're already zigzag)
+  let optFills = fillPaths.length > 0 ? optimizePaths(fillPaths, 0, 0) : [];
+
+  // Combine: fill first, then outlines on top
+  const allPaths = optFills.concat(paths);
+
+  const boundsErr = checkBounds(allPaths, b);
   if (boundsErr) {
     warn.textContent = `SVG ${boundsErr}`;
     plotBusy = false;
@@ -678,17 +801,17 @@ function plotSvg() {
 
   const penUpZ = getPenUpZ();
   const penDownZ = getPenDownZ();
-  const { cmds, map } = generatePlotCommandsWithMap(paths, speed, penUpZ, penDownZ);
+  const { cmds, map } = generatePlotCommandsWithMap(allPaths, speed, penUpZ, penDownZ);
 
   jobCommandMap = map;
-  jobPlotPaths = paths;
+  jobPlotPaths = allPaths;
   jobCurrentCmd = 0;
   jobStartTime = Date.now();
   resetDrawStateCache();
   startJob(cmds.length);
   addLine(`Sending ${cmds.length} commands...`, "info");
   sendCommandsBatched(cmds, () => {
-    addLine(`Plotting ${paths.length} paths (${cmds.length} commands)`, "info");
+    addLine(`Plotting ${allPaths.length} paths (${cmds.length} commands)`, "info");
     plotBusy = false;
   });
   renderPreview(ctx, getPreviewOpts());
@@ -721,9 +844,11 @@ cmdInput.addEventListener("keydown", (e) => {
 
 el("svg-file-input").addEventListener("change", onSvgFileChange);
 
-["svg-ox", "svg-oy", "svg-scale", "bed-x", "bed-y", "bed-padding"].forEach(id => {
+["svg-ox", "svg-oy", "svg-scale", "bed-x", "bed-y", "bed-padding", "svg-fill-angle", "svg-fill-min-spacing", "svg-fill-max-spacing", "svg-fill-max-brightness", "svg-fill-min-area", "pen-size"].forEach(id => {
   el(id).addEventListener("input", () => renderPreview(ctx, getPreviewOpts()));
 });
+
+el("svg-fill-mode").addEventListener("change", () => renderPreview(ctx, getPreviewOpts()));
 
 // ── Zoom / Pan ──
 
