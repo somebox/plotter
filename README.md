@@ -2,6 +2,8 @@
 
 Web UI for controlling a 3D printer (Marlin firmware) as a pen plotter over serial.
 
+![Plotting a multi-color topographic map](media/plotting-topo-map.jpeg)
+
 ## Features
 
 - Serial console with real-time output from the printer
@@ -13,6 +15,8 @@ Web UI for controlling a 3D printer (Marlin firmware) as a pen plotter over seri
 - Emergency stop and serial reset
 - Command queue with Marlin ok-based flow control
 - Fill/shading support for closed paths (hatch, crosshatch, dots) with brightness-based density
+
+![Web UI showing serial console and SVG import](media/web-ui-full.jpeg)
 
 ## Setup
 
@@ -56,4 +60,12 @@ The `tools/` directory contains standalone generators and utilities for creating
 
 ## Hardware
 
-Developed for a Creality CR-10S Pro (300x300mm bed) but should work with any Marlin-based printer.
+Developed for a Creality CR-10S Pro (300x300mm bed) but should work with any Marlin-based printer. A 3D-printed pen holder replaces the hotend nozzle and holds standard pens or pencils.
+
+![Pen holder mounted on the printer](media/pen-holder-mounted.jpeg)
+
+### Example Outputs
+
+| | |
+|---|---|
+| ![Building facade plot](media/plot-building-facade.jpeg) | ![Leaf circle plot](media/plot-leaf-circle.jpeg) |
