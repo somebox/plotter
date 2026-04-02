@@ -33,7 +33,8 @@ python3 drawbot_squiggle.py testArt/oldman.png /tmp/oldman_ascii_auto.svg --widt
 python3 drawbot_squiggle.py testArt/cowboyMan.png --strokes 4000 --style ascii --ascii-method auto --ascii-font "AVHershey Simplex Medium" --ascii-font-file "~/Downloads/AVHersheySimplexMedium.otf"
 ```
 
-Examples:
+**Examples:**
+
 ![Coboy using ASCII mode](../media/cowboySqiggle.jpg)
 ![Dali using squiggle default mode](../media/dali_squiggle.jpg)
 
