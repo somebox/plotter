@@ -60,7 +60,7 @@ The `tools/` directory contains standalone generators and utilities for creating
 
 ## Hardware
 
-Developed for a Creality CR-10S Pro (300x300mm bed) but should work with any Marlin-based printer. A 3D-printed pen holder replaces the hotend nozzle and holds standard pens or pencils.
+Developed for a Creality CR-10S Pro (300x300mm bed) but should work with any Marlin-based printer. A 3D-printed pen holder replaces the hotend nozzle and holds standard pens or pencils. The [3D models made in OnShape](https://cad.onshape.com/documents/b5af320602202ab4c920d13a/w/362c66d8c3042909616ba64c/e/07d05e9df060f64c96a42995?configuration=List_F7ej7qpsreIBt7%3DDefault&renderMode=0&uiState=69ce8d0960be72a4dbce4519) are available to clone or export as STL files for printing.
 
 ![Pen holder mounted on the printer](media/pen-holder-mounted.jpeg)
 
